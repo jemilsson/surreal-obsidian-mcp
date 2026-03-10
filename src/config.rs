@@ -180,10 +180,6 @@ impl Config {
                     anyhow::bail!("api_base is required for {:?} provider", self.embedding.provider);
                 }
             }
-            #[cfg(feature = "embedded")]
-            EmbeddingProvider::Embedded => {
-                // Embedded models don't need API keys
-            }
         }
 
         // Validate reranking config if enabled

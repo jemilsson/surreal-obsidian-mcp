@@ -53,11 +53,12 @@ pub fn create_reranking_service(
 #[cfg(feature = "embedded")]
 mod candle_reranker {
     use super::*;
-    use candle_core::{DType, Device, Tensor};
+    use candle_core::{DType, Device, IndexOp, Tensor};
     use candle_nn::VarBuilder;
     use candle_transformers::models::bert::{BertModel, Config as BertConfig};
     use hf_hub::{api::sync::Api, Repo, RepoType};
     use std::path::PathBuf;
+    use tracing::{debug, info};
     use tokenizers::Tokenizer;
 
     /// Candle-based reranker using cross-encoder models
@@ -114,12 +115,12 @@ mod candle_reranker {
             model_name: &str,
             cache_dir: &Option<PathBuf>,
         ) -> Result<(PathBuf, PathBuf)> {
-            let api = if let Some(cache) = cache_dir {
-                Api::new()?.with_cache_dir(cache.clone())
-            } else {
-                Api::new()?
-            };
+            // Set cache directory via environment variable if specified
+            if let Some(cache) = cache_dir {
+                std::env::set_var("HF_HOME", cache);
+            }
 
+            let api = Api::new()?;
             let repo = api.repo(Repo::new(model_name.to_string(), RepoType::Model));
 
             info!("Downloading model files from HuggingFace...");
@@ -158,8 +159,8 @@ mod candle_reranker {
             // Create attention mask
             let attention_mask = Tensor::ones((1, tokens.len()), DType::U8, &self.device)?;
 
-            // Forward pass through model
-            let output = self.model.forward(&token_ids, &attention_mask)?;
+            // Forward pass through model (None for token_type_ids)
+            let output = self.model.forward(&token_ids, &attention_mask, None)?;
 
             // Get [CLS] token representation (first token)
             let cls_output = output.i((0, 0))?;
