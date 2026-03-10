@@ -1,0 +1,29 @@
+{
+  "vault": {
+    "path": "/path/to/your/obsidian/vault"
+  },
+  "database": {
+    "path": "./obsidian.db"
+  },
+  "embedding": {
+    "provider": "open-ai",
+    "model": "text-embedding-3-small",
+    "dimensions": 1536,
+    "api_key": "sk-your-api-key-here",
+    "api_base": "https://api.openai.com/v1"
+  },
+  "reranking": {
+    "enabled": false
+  },
+  "sync": {
+    "watch_for_changes": true,
+    "initial_indexing": true,
+    "batch_size": 100
+  },
+  "graph": {
+    "extract_links": true,
+    "extract_backlinks": true,
+    "extract_tags": true,
+    "extract_mentions": true
+  }
+}

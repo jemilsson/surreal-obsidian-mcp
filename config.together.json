@@ -1,0 +1,33 @@
+{
+  "vault": {
+    "path": "/path/to/your/obsidian/vault"
+  },
+  "database": {
+    "path": "./obsidian.db"
+  },
+  "embedding": {
+    "provider": "open-ai-compatible",
+    "model": "togethercomputer/m2-bert-80M-8k-retrieval",
+    "dimensions": 768,
+    "api_key": "your-together-api-key",
+    "api_base": "https://api.together.xyz/v1"
+  },
+  "reranking": {
+    "enabled": true,
+    "provider": "embedded",
+    "model": "BAAI/bge-reranker-base",
+    "model_cache": "./model_cache",
+    "top_n": 20
+  },
+  "sync": {
+    "watch_for_changes": true,
+    "initial_indexing": true,
+    "batch_size": 100
+  },
+  "graph": {
+    "extract_links": true,
+    "extract_backlinks": true,
+    "extract_tags": true,
+    "extract_mentions": true
+  }
+}
