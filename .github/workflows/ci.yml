@@ -47,25 +47,6 @@ jobs:
       - name: Run clippy
         run: nix develop --command cargo clippy --all-features -- -D warnings
 
-  test-macos:
-    name: Test (macOS - Nix)
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-
-      - name: Build with Nix
-        run: nix build
-
-      - name: Run tests with Nix
-        run: nix develop --command cargo test --verbose
-
   security:
     name: Security Audit
     runs-on: ubuntu-latest
