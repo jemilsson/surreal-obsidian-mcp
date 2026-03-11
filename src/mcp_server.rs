@@ -462,7 +462,7 @@ impl McpServer {
 impl McpServer {
     /// Search the vault
     #[tool(
-        description = "Search the vault by meaning or keywords. ALWAYS search before answering questions — relevant notes may already exist. Uses semantic search when available, falls back to keyword search. Returns matching blocks with titles, file paths, and content previews."
+        description = "Search the vault by meaning or keywords. ALWAYS search before answering questions — relevant notes may already exist. Uses semantic search when available, falls back to keyword search. After finding a relevant result, call get_block(file_path) to read the full contents."
     )]
     async fn search(
         &self,
@@ -474,23 +474,25 @@ impl McpServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         fn fmt_block(b: &Block) -> String {
-            format!(
-                "- [{}] {}\n  File: {}\n  Content: {}\n",
-                b.id,
-                b.title,
-                b.file_path,
+            let preview = if b.content.trim().is_empty() {
+                "(call get_block to read full contents)".to_string()
+            } else {
                 b.content
                     .lines()
                     .next()
                     .unwrap_or("")
                     .chars()
                     .take(100)
-                    .collect::<String>()
+                    .collect()
+            };
+            format!(
+                "- {}\n  file_path: {}\n  preview: {}\n",
+                b.title, b.file_path, preview
             )
         }
 
         let mut text = format!(
-            "Found {} results for '{}':\n\n{}",
+            "Found {} results for '{}':\n\n{}\nTo read a result, call get_block with its file_path.",
             core.len(),
             params.0.query,
             core.iter().map(fmt_block).collect::<String>()
@@ -498,8 +500,7 @@ impl McpServer {
 
         if !expanded.is_empty() {
             text.push_str(&format!(
-                "\n## Related via Graph Expansion ({})\n\n{}",
-                expanded.len(),
+                "\n\nRelated via graph expansion:\n{}",
                 expanded.iter().map(fmt_block).collect::<String>()
             ));
         }
@@ -509,7 +510,7 @@ impl McpServer {
 
     /// Get a specific block by ID or content address
     #[tool(
-        description = "Read the full content of a specific note or section. The id must be the exact file_path returned by get_all_files or search_blocks (e.g., 'Vault/folder/note.md') — always include the full path with vault folder prefix. For headings use 'Vault/folder/note.md#Overview'. Supports mq queries: 'Vault/note.md#Overview?q=headings'."
+        description = "Read the full content of a file or section. Pass the exact file_path from search results (e.g., 'Vault/folder/note.md') — always include the vault folder prefix. For a specific heading use 'Vault/folder/note.md#Heading'. When called with a file path it returns ALL sections and content in the file. Supports mq queries: 'Vault/note.md?q=headings'."
     )]
     async fn get_block(
         &self,
@@ -544,17 +545,30 @@ impl McpServer {
                             None,
                         )),
                     }
-                } else {
-                    // No query - return block as JSON, with a hint if content is in children
-                    let mut text = serde_json::to_string_pretty(&b)
+                } else if b.content.trim().is_empty() && !b.children_ids.is_empty() {
+                    // File-level block with no top-level content — automatically return all sections
+                    let all_blocks = db
+                        .get_blocks_by_file(&b.file_path)
+                        .await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    if b.content.trim().is_empty() && !b.children_ids.is_empty() {
-                        text.push_str(&format!(
-                            "\n\nNote: This block has no top-level content but has {} section(s). Use get_blocks_by_file(\"{}\") to read all sections.",
-                            b.children_ids.len(),
-                            b.file_path
-                        ));
-                    }
+                    let text = format!(
+                        "File: {} ({} sections)\n\n{}",
+                        b.file_path,
+                        all_blocks.len().saturating_sub(1),
+                        all_blocks
+                            .iter()
+                            .filter(|s| !s.content.trim().is_empty())
+                            .map(|s| {
+                                let heading = "#".repeat(s.level.max(1) as usize);
+                                format!("{} {}\n{}\n", heading, s.title, s.content.trim())
+                            })
+                            .collect::<String>()
+                    );
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                } else {
+                    // Normal block with content
+                    let text = serde_json::to_string_pretty(&b)
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
             }
