@@ -182,46 +182,109 @@ impl Synchronizer {
             .await
             .context("Failed to get all blocks")?;
 
-        // Build a map of file_path -> block_id for link resolution
+        // Build lookup maps for link resolution:
+        // - exact file_path -> block_id (e.g. "Jonas/people/torbjorn-emilsson.md" -> id)
+        // - stem -> all matching file_paths across all vaults (for Obsidian short-link resolution)
         let mut file_to_block: HashMap<String, String> = HashMap::new();
+        let mut stem_to_files: HashMap<String, Vec<String>> = HashMap::new();
         for block in &all_blocks {
             if block.level == 0 {
-                // File blocks (level 0)
                 file_to_block.insert(block.file_path.clone(), block.id.clone());
+                let stem = std::path::Path::new(&block.file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                stem_to_files
+                    .entry(stem)
+                    .or_default()
+                    .push(block.file_path.clone());
             }
         }
 
-        // Build backlink map: target_block_id -> list of source_block_ids
+        /// Resolve a raw wiki-link target to a full file_path.
+        /// Prefers a match in the same vault (top-level directory) as the source file.
+        fn resolve_link(
+            target: &str,
+            source_file: &str,
+            file_to_block: &HashMap<String, String>,
+            stem_to_files: &HashMap<String, Vec<String>>,
+        ) -> Option<String> {
+            // Try exact match first
+            if file_to_block.contains_key(target) {
+                return Some(target.to_string());
+            }
+            // Try with .md appended
+            let with_md = format!("{}.md", target);
+            if file_to_block.contains_key(&with_md) {
+                return Some(with_md);
+            }
+            // Stem lookup — prefer same vault (first path component) as source file
+            let stem = std::path::Path::new(target)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(target);
+            let candidates = stem_to_files.get(stem)?;
+            // Prefer same vault (first path component) as source file — Obsidian links are vault-scoped
+            let source_vault = source_file.split('/').next().unwrap_or("");
+            candidates
+                .iter()
+                .find(|p| p.starts_with(source_vault))
+                .cloned()
+        }
+
+        // Build backlink map and collect resolved outgoing links per block
         let mut backlinks: HashMap<String, Vec<String>> = HashMap::new();
+        let mut resolved_outgoing: HashMap<String, Vec<String>> = HashMap::new();
 
         for block in &all_blocks {
+            let mut resolved = Vec::new();
             for link_target in &block.outgoing_links {
-                // Try to resolve the link target to a block ID
-                // Links in Obsidian are typically file names without extension
-                let target_file = if link_target.ends_with(".md") {
-                    link_target.clone()
+                if let Some(full_path) = resolve_link(
+                    link_target,
+                    &block.file_path,
+                    &file_to_block,
+                    &stem_to_files,
+                ) {
+                    if let Some(target_block_id) = file_to_block.get(&full_path) {
+                        backlinks
+                            .entry(target_block_id.clone())
+                            .or_default()
+                            .push(block.id.clone());
+                    }
+                    resolved.push(full_path);
                 } else {
-                    format!("{}.md", link_target)
-                };
-
-                if let Some(target_block_id) = file_to_block.get(&target_file) {
-                    backlinks
-                        .entry(target_block_id.clone())
-                        .or_default()
-                        .push(block.id.clone());
+                    // Keep unresolved links as-is
+                    resolved.push(link_target.clone());
                 }
             }
+            resolved_outgoing.insert(block.id.clone(), resolved);
         }
 
-        // Update incoming_links for each block
+        // Update incoming_links and resolved outgoing_links for each block
         drop(db); // Release read lock
         let db = self.db.write().await;
 
         for (block_id, incoming) in backlinks {
             if let Ok(Some(mut block)) = db.get_block(&block_id).await {
                 block.incoming_links = incoming;
+                if let Some(outgoing) = resolved_outgoing.remove(&block.id) {
+                    block.outgoing_links = outgoing;
+                }
                 if let Err(e) = db.update_block(&block_id, block).await {
                     error!("Failed to update backlinks for block {}: {}", block_id, e);
+                }
+            }
+        }
+        // Update outgoing_links for blocks that had no incoming links
+        for (block_id, outgoing) in resolved_outgoing {
+            if let Ok(Some(mut block)) = db.get_block(&block_id).await {
+                block.outgoing_links = outgoing;
+                if let Err(e) = db.update_block(&block_id, block).await {
+                    error!(
+                        "Failed to update outgoing links for block {}: {}",
+                        block_id, e
+                    );
                 }
             }
         }

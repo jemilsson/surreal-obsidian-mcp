@@ -41,8 +41,10 @@ pub struct SearchBlocksInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetBlockInput {
-    /// Block ID (e.g., "block_abc123") OR content address (e.g., "project.md" or "project.md#Overview")
-    /// Supports optional mq queries using URL-style syntax: "project.md#Overview?query=headings"
+    /// Block ID (e.g., "block_abc123") OR full content address including vault folder prefix
+    /// (e.g., "Vault/folder/note.md" or "Vault/folder/note.md#Overview").
+    /// Use the exact file_path from get_all_files or search_blocks — do not strip the vault prefix.
+    /// Supports optional mq queries: "Vault/note.md#Overview?query=headings"
     pub id: String,
 }
 
@@ -435,7 +437,7 @@ impl McpServer {
 
     /// Get a specific block by ID or content address
     #[tool(
-        description = "Read the full content of a specific note or section by file path (e.g., 'project.md') or heading address (e.g., 'project.md#Overview'). Use after search_blocks to read a full result, or when you know exactly which note to fetch. Supports mq queries: 'project.md#Overview?query=headings' to extract structured elements."
+        description = "Read the full content of a specific note or section. The id must be the exact file_path returned by get_all_files or search_blocks (e.g., 'Vault/folder/note.md') — always include the full path with vault folder prefix. For headings use 'Vault/folder/note.md#Overview'. Supports mq queries: 'Vault/note.md#Overview?query=headings'."
     )]
     async fn get_block(
         &self,
