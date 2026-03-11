@@ -31,20 +31,23 @@ pub struct McpServer {
 
 // Tool input schemas
 #[derive(Serialize, Deserialize, JsonSchema)]
-pub struct SearchBlocksInput {
-    /// Search query to match against block titles and content
+pub struct SearchInput {
+    /// Search query
     pub query: String,
     /// Maximum number of results to return
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Depth of graph expansion (0=none, 1=direct links, 2=links of links, etc.)
+    #[serde(default)]
+    pub expand: u8,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetBlockInput {
     /// Block ID (e.g., "block_abc123") OR full content address including vault folder prefix
     /// (e.g., "Vault/folder/note.md" or "Vault/folder/note.md#Overview").
-    /// Use the exact file_path from get_all_files or search_blocks — do not strip the vault prefix.
-    /// Supports optional mq queries: "Vault/note.md#Overview?query=headings"
+    /// Use the exact file_path from get_all_files or search — do not strip the vault prefix.
+    /// Supports optional mq queries: "Vault/note.md#Overview?q=headings"
     pub id: String,
 }
 
@@ -60,17 +63,6 @@ pub struct GetChildrenInput {
     pub parent_id: String,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct SearchSimilarInput {
-    /// Query text to find semantically similar blocks
-    pub query: String,
-    /// Maximum number of results to return
-    #[serde(default = "default_limit")]
-    pub limit: usize,
-    /// Depth of graph expansion (0=none, 1=direct links, 2=links of links, etc.)
-    #[serde(default)]
-    pub expand: u8,
-}
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct CreateBlockInput {
@@ -152,12 +144,11 @@ fn default_max_depth() -> usize {
 }
 
 /// Parse an address with optional mq query parameter
-/// Format: "address?query=expression"
+/// Format: "address?q=expression"
 /// Returns (base_address, optional_query)
 fn parse_address_with_query(address: &str) -> (String, Option<String>) {
     if let Some((base, query_part)) = address.split_once('?') {
-        // Parse query parameter
-        if let Some(query) = query_part.strip_prefix("query=") {
+        if let Some(query) = query_part.strip_prefix("q=") {
             return (base.to_string(), Some(query.to_string()));
         }
         // If malformed query param, return full address as base
@@ -168,7 +159,7 @@ fn parse_address_with_query(address: &str) -> (String, Option<String>) {
 }
 
 /// Execute an mq query on a block's markdown content
-fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, String> {
+pub(crate) fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, String> {
     use mq_lang::DefaultEngine;
 
     // Construct full markdown content
@@ -349,6 +340,14 @@ impl McpServer {
         Ok(())
     }
 
+    pub fn db(&self) -> Arc<RwLock<Database>> {
+        self.db.clone()
+    }
+
+    pub fn config(&self) -> Arc<Config> {
+        self.config.clone()
+    }
+
     /// Create a new MCP server
     pub fn new(db: Arc<RwLock<Database>>, config: Arc<Config>) -> Self {
         // Initialize embedding service if configured
@@ -376,6 +375,71 @@ impl McpServer {
         }
     }
 
+    /// Core search logic: semantic when embeddings available, keyword fallback.
+    /// Returns (core_blocks, expanded_blocks).
+    pub(crate) async fn do_search(
+        &self,
+        query: &str,
+        limit: usize,
+        expand: u8,
+    ) -> Result<(Vec<Block>, Vec<Block>)> {
+        let core_results = if let Some(embedding_service) = &self.embedding_service {
+            let query_text = prepare_block_text(query, "", 8000);
+            let query_embedding = embedding_service.embed(query_text).await?;
+
+            let initial_limit = if self.reranking_service.is_some() {
+                limit * 3
+            } else {
+                limit
+            };
+
+            let db = self.db.read().await;
+            let mut blocks = db.search_similar(query_embedding, initial_limit).await?;
+            drop(db);
+
+            if let Some(reranker) = &self.reranking_service {
+                reranker
+                    .rerank(query, blocks)
+                    .await?
+                    .into_iter()
+                    .map(|r| r.block)
+                    .collect()
+            } else {
+                blocks.truncate(limit);
+                blocks
+            }
+        } else {
+            let db = self.db.read().await;
+            db.search_blocks(query, limit).await?
+        };
+
+        if expand == 0 {
+            return Ok((core_results, vec![]));
+        }
+
+        let db = self.db.read().await;
+        let core_ids: std::collections::HashSet<_> =
+            core_results.iter().map(|b| b.id.clone()).collect();
+        let mut expanded_ids = std::collections::HashSet::new();
+
+        for block in &core_results {
+            for exp in expand_block_graph(&db, &block.id, expand).await? {
+                if !core_ids.contains(&exp.id) {
+                    expanded_ids.insert(exp.id.clone());
+                }
+            }
+        }
+
+        let mut expanded_blocks = Vec::new();
+        for id in expanded_ids {
+            if let Some(block) = db.get_block(&id).await? {
+                expanded_blocks.push(block);
+            }
+        }
+
+        Ok((core_results, expanded_blocks))
+    }
+
     /// Run the MCP server with stdio transport
     pub async fn run(self) -> Result<()> {
         info!("Starting MCP server on stdio");
@@ -396,48 +460,56 @@ impl McpServer {
 
 #[tool_router]
 impl McpServer {
-    /// Search blocks by content (title or body text)
+    /// Search the vault
     #[tool(
-        description = "Search for notes and knowledge by keyword or phrase. ALWAYS search the vault before answering questions — relevant notes may already exist. Returns matching blocks with titles, file paths, and content previews. Use this as your primary knowledge lookup tool."
+        description = "Search the vault by meaning or keywords. ALWAYS search before answering questions — relevant notes may already exist. Uses semantic search when available, falls back to keyword search. Returns matching blocks with titles, file paths, and content previews."
     )]
-    async fn search_blocks(
+    async fn search(
         &self,
-        params: Parameters<SearchBlocksInput>,
+        params: Parameters<SearchInput>,
     ) -> Result<CallToolResult, McpError> {
-        let db = self.db.read().await;
-        let blocks = db
-            .search_blocks(&params.0.query, params.0.limit)
+        let (core, expanded) = self
+            .do_search(&params.0.query, params.0.limit, params.0.expand)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let text = format!(
-            "Found {} blocks matching '{}':\n\n{}",
-            blocks.len(),
+        fn fmt_block(b: &Block) -> String {
+            format!(
+                "- [{}] {}\n  File: {}\n  Content: {}\n",
+                b.id,
+                b.title,
+                b.file_path,
+                b.content
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(100)
+                    .collect::<String>()
+            )
+        }
+
+        let mut text = format!(
+            "Found {} results for '{}':\n\n{}",
+            core.len(),
             params.0.query,
-            blocks
-                .iter()
-                .map(|b| format!(
-                    "- [{}] {}\n  File: {}\n  Content: {}\n",
-                    b.id,
-                    b.title,
-                    b.file_path,
-                    b.content
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .chars()
-                        .take(100)
-                        .collect::<String>()
-                ))
-                .collect::<String>()
+            core.iter().map(fmt_block).collect::<String>()
         );
+
+        if !expanded.is_empty() {
+            text.push_str(&format!(
+                "\n## Related via Graph Expansion ({})\n\n{}",
+                expanded.len(),
+                expanded.iter().map(fmt_block).collect::<String>()
+            ));
+        }
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
     /// Get a specific block by ID or content address
     #[tool(
-        description = "Read the full content of a specific note or section. The id must be the exact file_path returned by get_all_files or search_blocks (e.g., 'Vault/folder/note.md') — always include the full path with vault folder prefix. For headings use 'Vault/folder/note.md#Overview'. Supports mq queries: 'Vault/note.md#Overview?query=headings'."
+        description = "Read the full content of a specific note or section. The id must be the exact file_path returned by get_all_files or search_blocks (e.g., 'Vault/folder/note.md') — always include the full path with vault folder prefix. For headings use 'Vault/folder/note.md#Overview'. Supports mq queries: 'Vault/note.md#Overview?q=headings'."
     )]
     async fn get_block(
         &self,
@@ -580,170 +652,6 @@ impl McpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    /// Search for semantically similar blocks using vector embeddings
-    #[tool(
-        description = "Find conceptually related notes using semantic similarity (requires embeddings to be configured). Use when searching by meaning or concept rather than exact keywords — complements search_blocks for broader knowledge discovery."
-    )]
-    async fn search_similar(
-        &self,
-        params: Parameters<SearchSimilarInput>,
-    ) -> Result<CallToolResult, McpError> {
-        // Check if embedding service is available
-        let embedding_service = self.embedding_service.as_ref().ok_or_else(|| {
-            McpError::invalid_request(
-                "Embedding service not configured. Please configure an embedding provider in config.json.".to_string(),
-                None,
-            )
-        })?;
-
-        // Generate embedding for the query
-        let query_text = prepare_block_text(&params.0.query, "", 8000);
-        let query_embedding = embedding_service.embed(query_text).await.map_err(|e| {
-            McpError::internal_error(format!("Failed to generate query embedding: {}", e), None)
-        })?;
-
-        // Search for similar blocks (get more results if reranking is enabled)
-        let initial_limit = if self.reranking_service.is_some() {
-            params.0.limit * 3 // Get 3x results for reranking
-        } else {
-            params.0.limit
-        };
-
-        let db = self.db.read().await;
-        let mut blocks = db
-            .search_similar(query_embedding, initial_limit)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        drop(db);
-
-        // Apply reranking if available
-        let core_results: Vec<Block> = if let Some(reranker) = &self.reranking_service {
-            let ranked_results = reranker
-                .rerank(&params.0.query, blocks)
-                .await
-                .map_err(|e| McpError::internal_error(format!("Reranking failed: {}", e), None))?;
-            ranked_results.into_iter().map(|r| r.block).collect()
-        } else {
-            // No reranking - truncate to requested limit
-            blocks.truncate(params.0.limit);
-            blocks
-        };
-
-        // Perform graph expansion if requested
-        if params.0.expand > 0 {
-            let db = self.db.read().await;
-            let mut expanded_blocks = std::collections::HashSet::new();
-            let mut core_ids = std::collections::HashSet::new();
-
-            // Mark core results
-            for block in &core_results {
-                core_ids.insert(block.id.clone());
-            }
-
-            // Expand from each core result
-            for block in &core_results {
-                let expanded = expand_block_graph(&db, &block.id, params.0.expand)
-                    .await
-                    .map_err(|e| {
-                        McpError::internal_error(format!("Graph expansion failed: {}", e), None)
-                    })?;
-
-                for exp_block in expanded {
-                    // Only add if not already in core results
-                    if !core_ids.contains(&exp_block.id) {
-                        expanded_blocks.insert(exp_block.id.clone());
-                    }
-                }
-            }
-
-            // Fetch expanded blocks
-            let mut expanded_block_list = Vec::new();
-            for block_id in expanded_blocks {
-                if let Some(block) = db
-                    .get_block(&block_id)
-                    .await
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
-                {
-                    expanded_block_list.push(block);
-                }
-            }
-            drop(db);
-
-            // Format results with core and expanded sections
-            let mut text = format!(
-                "Found {} semantically similar blocks for '{}' (expanded to depth {}):\n\n## Core Results ({})\n\n",
-                core_results.len(),
-                params.0.query,
-                params.0.expand,
-                core_results.len()
-            );
-
-            for b in &core_results {
-                text.push_str(&format!(
-                    "- [{}] {}\n  File: {}\n  Content: {}\n\n",
-                    b.id,
-                    b.title,
-                    b.file_path,
-                    b.content
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .chars()
-                        .take(100)
-                        .collect::<String>()
-                ));
-            }
-
-            if !expanded_block_list.is_empty() {
-                text.push_str(&format!(
-                    "\n## Related via Graph Expansion ({})\n\n",
-                    expanded_block_list.len()
-                ));
-                for b in &expanded_block_list {
-                    text.push_str(&format!(
-                        "- [{}] {}\n  File: {}\n  Content: {}\n\n",
-                        b.id,
-                        b.title,
-                        b.file_path,
-                        b.content
-                            .lines()
-                            .next()
-                            .unwrap_or("")
-                            .chars()
-                            .take(100)
-                            .collect::<String>()
-                    ));
-                }
-            }
-
-            return Ok(CallToolResult::success(vec![Content::text(text)]));
-        }
-
-        // No expansion - just return core results
-        let text = format!(
-            "Found {} semantically similar blocks for '{}':\n\n{}",
-            core_results.len(),
-            params.0.query,
-            core_results
-                .iter()
-                .map(|b| format!(
-                    "- [{}] {}\n  File: {}\n  Content: {}\n",
-                    b.id,
-                    b.title,
-                    b.file_path,
-                    b.content
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .chars()
-                        .take(100)
-                        .collect::<String>()
-                ))
-                .collect::<String>()
-        );
-
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
 
     /// Create a new block (file or heading)
     #[tool(
