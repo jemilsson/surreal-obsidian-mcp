@@ -263,7 +263,7 @@ async fn expand_block_graph(
 impl McpServer {
     /// List all available tools
     pub fn list_tools(&self) -> Vec<Tool> {
-        self.tool_router.list_tools()
+        self.tool_router.list_all()
     }
 
     /// Call a tool by name with arguments
