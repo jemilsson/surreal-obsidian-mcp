@@ -48,6 +48,10 @@ pulldown-cmark = "0.11"
 pulldown-cmark-to-cmark = "15"
 gray_matter = "0.2"
 
+# mq - markdown query language
+mq-lang = "0.5"
+mq-markdown = "0.5"
+
 # File watching
 notify = "6.1"
 notify-debouncer-full = "0.3"

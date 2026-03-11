@@ -40,7 +40,8 @@ pub struct SearchBlocksInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetBlockInput {
-    /// Block ID to retrieve
+    /// Block ID (e.g., "block_abc123") OR content address (e.g., "project.md" or "project.md#Overview")
+    /// Supports optional mq queries using URL-style syntax: "project.md#Overview?query=headings"
     pub id: String,
 }
 
@@ -52,7 +53,7 @@ pub struct GetBlocksByFileInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetChildrenInput {
-    /// Parent block ID
+    /// Parent block ID or content address
     pub parent_id: String,
 }
 
@@ -85,7 +86,7 @@ pub struct CreateBlockInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct UpdateBlockInput {
-    /// Block ID to update
+    /// Block ID or content address (e.g., "project.md#Tasks")
     pub id: String,
     /// New title (optional)
     pub title: Option<String>,
@@ -95,13 +96,13 @@ pub struct UpdateBlockInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct DeleteBlockInput {
-    /// Block ID to delete
+    /// Block ID or content address to delete
     pub id: String,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct AppendToBlockInput {
-    /// Block ID to append to
+    /// Block ID or content address to append to
     pub id: String,
     /// Content to append
     pub content: String,
@@ -109,13 +110,13 @@ pub struct AppendToBlockInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetLinkedBlocksInput {
-    /// Block ID to get outgoing links from
+    /// Block ID or content address to get outgoing links from
     pub id: String,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct GetBacklinksInput {
-    /// Block ID to get incoming links to
+    /// Block ID or content address to get incoming links to
     pub id: String,
 }
 
@@ -130,9 +131,9 @@ pub struct FindByTagInput {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct FindConnectionPathInput {
-    /// Starting block ID
+    /// Starting block ID or content address
     pub from_id: String,
-    /// Target block ID
+    /// Target block ID or content address
     pub to_id: String,
     /// Maximum path depth to search (default 5)
     #[serde(default = "default_max_depth")]
@@ -145,6 +146,49 @@ fn default_limit() -> usize {
 
 fn default_max_depth() -> usize {
     5
+}
+
+/// Parse an address with optional mq query parameter
+/// Format: "address?query=expression"
+/// Returns (base_address, optional_query)
+fn parse_address_with_query(address: &str) -> (String, Option<String>) {
+    if let Some((base, query_part)) = address.split_once('?') {
+        // Parse query parameter
+        if let Some(query) = query_part.strip_prefix("query=") {
+            return (base.to_string(), Some(query.to_string()));
+        }
+        // If malformed query param, return full address as base
+        (address.to_string(), None)
+    } else {
+        (address.to_string(), None)
+    }
+}
+
+/// Execute an mq query on a block's markdown content
+fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, String> {
+    use mq_lang::Interpreter;
+    use mq_markdown::parse_markdown;
+
+    // Construct full markdown content
+    let markdown_content = if block.level == 0 {
+        // File block: just use content (already includes title as heading)
+        block.content.clone()
+    } else {
+        // Section block: prepend heading
+        let heading_prefix = "#".repeat(block.level as usize);
+        format!("{} {}\n\n{}", heading_prefix, block.title, block.content)
+    };
+
+    let interpreter = Interpreter::new();
+
+    // Parse markdown into mq's AST
+    let ast = parse_markdown(&markdown_content)
+        .map_err(|e| format!("Failed to parse markdown: {}", e))?;
+
+    // Execute the query
+    interpreter
+        .eval(query, &ast)
+        .map_err(|e| format!("Query execution failed: {}", e))
 }
 
 /// Expand the graph from a starting block to the specified depth
@@ -349,26 +393,53 @@ impl McpServer {
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
 
-    /// Get a specific block by ID
-    #[tool(description = "Get a specific block by ID")]
+    /// Get a specific block by ID or content address
+    #[tool(description = "Get a specific block by ID or content address (e.g., 'project.md#Overview'). Supports mq queries: 'project.md#Overview?query=headings' to extract specific markdown elements")]
     async fn get_block(
         &self,
         params: Parameters<GetBlockInput>,
     ) -> Result<CallToolResult, McpError> {
+        // Parse address to extract optional query
+        let (base_address, query) = parse_address_with_query(&params.0.id);
+
         let db = self.db.read().await;
         let block = db
-            .get_block(&params.0.id)
+            .get_block_by_id_or_address(&base_address)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         match block {
             Some(b) => {
-                let text = serde_json::to_string_pretty(&b)
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+                // If query is present, execute it and return results
+                if let Some(q) = query {
+                    match execute_mq_query(&b, &q) {
+                        Ok(result) => {
+                            let result_str = serde_json::to_string_pretty(&result)
+                                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                            let text = format!(
+                                "Query: {}\nBlock: {} ({})\n\nResult:\n{}",
+                                q,
+                                b.title,
+                                b.content_address,
+                                result_str
+                            );
+                            Ok(CallToolResult::success(vec![Content::text(text)]))
+                        }
+                        Err(e) => Err(McpError::internal_error(
+                            format!("mq query failed: {}", e),
+                            None
+                        ))
+                    }
+                } else {
+                    // No query - return block as JSON (original behavior)
+                    let text = serde_json::to_string_pretty(&b)
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                    Ok(CallToolResult::success(vec![Content::text(text)]))
+                }
             }
             None => Err(McpError::invalid_request(
-                format!("Block not found: {}", params.0.id),
+                format!("Block not found: {}", base_address),
                 None,
             )),
         }
@@ -419,14 +490,26 @@ impl McpServer {
     }
 
     /// Get child blocks of a specific block
-    #[tool(description = "Get child blocks of a specific block")]
+    #[tool(description = "Get child blocks of a specific block by ID or content address")]
     async fn get_children(
         &self,
         params: Parameters<GetChildrenInput>,
     ) -> Result<CallToolResult, McpError> {
         let db = self.db.read().await;
+
+        // First resolve parent_id to actual block to get its ID
+        let parent_block = db
+            .get_block_by_id_or_address(&params.0.parent_id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::invalid_request(
+                format!("Parent block not found: {}", params.0.parent_id),
+                None
+            ))?;
+
+        // Now get children using the resolved block's actual ID
         let children = db
-            .get_children(&params.0.parent_id)
+            .get_children(&parent_block.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -668,7 +751,7 @@ impl McpServer {
     }
 
     /// Update an existing block's content or title
-    #[tool(description = "Update an existing block's content or title")]
+    #[tool(description = "Update an existing block's content or title by ID or content address")]
     async fn update_block(
         &self,
         params: Parameters<UpdateBlockInput>,
@@ -678,7 +761,7 @@ impl McpServer {
         let db = self.db.write().await;
 
         // Get the existing block
-        let block_result = db.get_block(&input.id).await;
+        let block_result = db.get_block_by_id_or_address(&input.id).await;
 
         let (mut block, file_path) = match block_result {
             Ok(Some(b)) => {
@@ -697,7 +780,8 @@ impl McpServer {
                 for file in files {
                     let blocks = db_read.get_blocks_by_file(&file.file_path).await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    if blocks.iter().any(|b| b.id == input.id) {
+                    // Try to match by content address or ID
+                    if blocks.iter().any(|b| b.id == input.id || b.content_address == input.id) {
                         target_file = Some(file.file_path.clone());
                         break;
                     }
@@ -710,7 +794,7 @@ impl McpServer {
 
                     // Retry getting the block
                     let db = self.db.write().await;
-                    let b = db.get_block(&input.id).await
+                    let b = db.get_block_by_id_or_address(&input.id).await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?
                         .ok_or_else(|| McpError::invalid_request(
                             format!("Block not found even after re-indexing: {}", input.id),
@@ -786,7 +870,7 @@ impl McpServer {
     }
 
     /// Delete a block
-    #[tool(description = "Delete a block from the vault")]
+    #[tool(description = "Delete a block from the vault by ID or content address")]
     async fn delete_block(
         &self,
         params: Parameters<DeleteBlockInput>,
@@ -796,7 +880,7 @@ impl McpServer {
         let db = self.db.write().await;
 
         // Get the block to find its file path
-        let block_result = db.get_block(&input.id).await;
+        let block_result = db.get_block_by_id_or_address(&input.id).await;
 
         let block = match block_result {
             Ok(Some(b)) => b,
@@ -812,7 +896,8 @@ impl McpServer {
                 for file in files {
                     let blocks = db_read.get_blocks_by_file(&file.file_path).await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                    if blocks.iter().any(|b2| b2.id == input.id) {
+                    // Try to match by content address or ID
+                    if blocks.iter().any(|b2| b2.id == input.id || b2.content_address == input.id) {
                         target_file = Some(file.file_path.clone());
                         break;
                     }
@@ -825,7 +910,7 @@ impl McpServer {
 
                     // Retry getting the block
                     let db = self.db.write().await;
-                    let b = db.get_block(&input.id).await
+                    let b = db.get_block_by_id_or_address(&input.id).await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?
                         .ok_or_else(|| McpError::invalid_request(
                             format!("Block not found even after re-indexing: {}", input.id),
@@ -895,7 +980,7 @@ impl McpServer {
     }
 
     /// Append content to an existing block
-    #[tool(description = "Append content to an existing block")]
+    #[tool(description = "Append content to an existing block by ID or content address")]
     async fn append_to_block(
         &self,
         params: Parameters<AppendToBlockInput>,
@@ -906,7 +991,7 @@ impl McpServer {
 
         // Get the existing block
         let mut block = db
-            .get_block(&input.id)
+            .get_block_by_id_or_address(&input.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
             .ok_or_else(|| McpError::invalid_request(format!("Block not found: {}", input.id), None))?;
@@ -967,14 +1052,25 @@ impl McpServer {
     }
 
     /// Get blocks that this block links to (outgoing links)
-    #[tool(description = "Get blocks that this block links to (outgoing wiki-links)")]
+    #[tool(description = "Get blocks that this block links to (outgoing wiki-links) by ID or content address")]
     async fn get_linked_blocks(
         &self,
         params: Parameters<GetLinkedBlocksInput>,
     ) -> Result<CallToolResult, McpError> {
         let db = self.db.read().await;
+
+        // Resolve the block ID or address
+        let block = db
+            .get_block_by_id_or_address(&params.0.id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::invalid_request(
+                format!("Block not found: {}", params.0.id),
+                None
+            ))?;
+
         let linked_blocks = db
-            .get_linked_blocks(&params.0.id)
+            .get_linked_blocks(&block.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -1001,14 +1097,25 @@ impl McpServer {
     }
 
     /// Get blocks that link to this block (backlinks)
-    #[tool(description = "Get blocks that link to this block (incoming wiki-links/backlinks)")]
+    #[tool(description = "Get blocks that link to this block (incoming wiki-links/backlinks) by ID or content address")]
     async fn get_backlinks(
         &self,
         params: Parameters<GetBacklinksInput>,
     ) -> Result<CallToolResult, McpError> {
         let db = self.db.read().await;
+
+        // Resolve the block ID or address
+        let block = db
+            .get_block_by_id_or_address(&params.0.id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::invalid_request(
+                format!("Block not found: {}", params.0.id),
+                None
+            ))?;
+
         let backlinks = db
-            .get_backlinks(&params.0.id)
+            .get_backlinks(&block.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
@@ -1070,23 +1177,23 @@ impl McpServer {
     }
 
     /// Find connection path between two blocks via wiki-links
-    #[tool(description = "Find a connection path between two blocks via wiki-links (BFS search)")]
+    #[tool(description = "Find a connection path between two blocks via wiki-links (BFS search) using IDs or content addresses")]
     async fn find_connection_path(
         &self,
         params: Parameters<FindConnectionPathInput>,
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
 
-        // Validate blocks exist
+        // Validate blocks exist and resolve addresses to IDs
         let db = self.db.read().await;
         let from_block = db
-            .get_block(&input.from_id)
+            .get_block_by_id_or_address(&input.from_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
             .ok_or_else(|| McpError::invalid_request(format!("Source block not found: {}", input.from_id), None))?;
 
         let to_block = db
-            .get_block(&input.to_id)
+            .get_block_by_id_or_address(&input.to_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
             .ok_or_else(|| McpError::invalid_request(format!("Target block not found: {}", input.to_id), None))?;

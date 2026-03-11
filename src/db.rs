@@ -16,6 +16,7 @@ struct BlockRecord {
     title: String,
     content: String,
     file_path: String,
+    content_address: String,
     #[serde(default)]
     parent_id: Option<String>,
     #[serde(default)]
@@ -57,6 +58,7 @@ impl BlockRecord {
             title: self.title,
             content: self.content,
             file_path: self.file_path,
+            content_address: self.content_address,
             parent_id: self.parent_id,
             children_ids: self.children_ids,
             properties: self.properties,
@@ -86,6 +88,9 @@ pub struct Block {
     pub title: String,
     pub content: String,
     pub file_path: String, // Relative path from vault root
+
+    // Content addressing (human-readable reference)
+    pub content_address: String, // e.g., "project.md" or "project.md#Overview"
 
     // Hierarchy
     pub parent_id: Option<String>,
@@ -206,6 +211,31 @@ impl Database {
             .context("Failed to get block")?;
 
         Ok(result.map(|record| record.to_block()))
+    }
+
+    /// Get a block by content address (e.g., "project.md" or "project.md#Overview")
+    pub async fn get_block_by_address(&self, address: &str) -> Result<Option<Block>> {
+        let records: Vec<BlockRecord> = self
+            .db
+            .query("SELECT * FROM blocks WHERE content_address = $address LIMIT 1")
+            .bind(("address", address.to_string()))
+            .await
+            .context("Failed to query block by content address")?
+            .take(0)
+            .context("Failed to parse query result")?;
+
+        Ok(records.into_iter().next().map(|record| record.to_block()))
+    }
+
+    /// Get a block by either ID or content address (tries ID first, then address)
+    pub async fn get_block_by_id_or_address(&self, id_or_address: &str) -> Result<Option<Block>> {
+        // Try as block ID first
+        if let Some(block) = self.get_block(id_or_address).await? {
+            return Ok(Some(block));
+        }
+
+        // Fall back to content address lookup
+        self.get_block_by_address(id_or_address).await
     }
 
     /// Update a block
@@ -443,14 +473,29 @@ impl Database {
 }
 
 impl Block {
+    /// Generate a content address for a block
+    /// Format: "file.md" for level 0, "file.md#Heading" for headings
+    pub fn generate_content_address(file_path: &str, level: u8, title: &str) -> String {
+        if level == 0 {
+            // File-level block: just the file path
+            file_path.to_string()
+        } else {
+            // Heading block: file_path#heading_title
+            format!("{}#{}", file_path, title)
+        }
+    }
+
     /// Create a new block
     pub fn new(level: u8, title: String, content: String, file_path: String) -> Self {
+        let content_address = Self::generate_content_address(&file_path, level, &title);
+
         Self {
             id: String::new(), // Will be generated on insert
             level,
             title,
             content,
             file_path,
+            content_address,
             parent_id: None,
             children_ids: Vec::new(),
             properties: BTreeMap::new(),
