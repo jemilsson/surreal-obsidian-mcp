@@ -56,6 +56,7 @@ pub async fn start_http_server(server: Arc<McpServer>, port: u16) -> Result<()> 
 
     // Create axum router: REST vault API + search + MCP fallback
     let app = Router::new()
+        .route("/docs", get(docs_handler))
         .route("/vault/{*path}", get(vault_handler))
         .route("/search", get(search_handler).post(search_handler_post))
         .with_state(server)
@@ -270,4 +271,81 @@ async fn search_handler_post(
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+async fn docs_handler() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        r#"# surreal-obsidian-mcp API
+
+## REST API
+
+### GET /docs
+This page.
+
+### GET /vault/{path}
+Returns the raw markdown of a file in the vault.
+
+    GET /vault/Jonas/hobbies/shooting/Weapon-Licenses.md
+
+Optionally apply an [mq](https://github.com/harehare/mq) query with `?q=`:
+
+    GET /vault/Jonas/Me.md?q=select(.[] | headings)
+
+### GET /search
+Search the vault. Returns JSON with `results` and `expanded` arrays.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `q`       | required | Search query |
+| `limit`   | 10 | Max results |
+| `expand`  | 0 | Graph expansion depth |
+
+    GET /search?q=weapon+licenses&limit=5
+
+### POST /search
+Same as GET but accepts a body.
+
+**JSON body** (`Content-Type: application/json`):
+
+    {"q": "weapon licenses", "limit": 5, "expand": 0}
+
+**Plain text body** (any other Content-Type):
+
+    POST /search
+    Content-Type: text/plain
+    X-Limit: 5
+    X-Expand: 0
+
+    weapon licenses
+
+Headers `X-Limit` and `X-Expand` control result count and graph expansion depth.
+
+---
+
+## MCP (Model Context Protocol)
+
+Connect AI assistants via the MCP Streamable HTTP transport at the server root (`/`).
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `search` | Semantic or keyword search across the vault |
+| `get_block` | Read a file or section by path (e.g. `Vault/folder/note.md`) |
+| `get_blocks_by_file` | Get all sections of a file |
+| `get_all_files` | List all files in the vault |
+| `get_children` | Get child sections of a block |
+| `create_block` | Create a new note or heading |
+| `update_block` | Update an existing block's content |
+| `delete_block` | Delete a block |
+| `execute_mq_query` | Run an mq query against a block |
+
+### MCP address format
+
+- File: `Vault/folder/note.md`
+- Heading: `Vault/folder/note.md#Heading Title`
+- With mq query: `Vault/folder/note.md?q=headings`
+"#,
+    )
 }
