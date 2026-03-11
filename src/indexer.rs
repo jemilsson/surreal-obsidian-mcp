@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::path::Path;
 
 use crate::db::Block;
@@ -52,19 +51,27 @@ pub fn extract_blocks_from_parsed(
             .to_string()
     };
 
+    // Convert frontmatter to HashMap<String, String>
+    let properties = convert_frontmatter_to_string_map(&parsed.frontmatter);
+
+    // Generate ID upfront so parent-child relationships can reference it
+    let file_id = format!("block_{}", uuid::Uuid::new_v4().simple());
+
     let file_block = Block {
-        id: String::new(), // Will be generated on insert
+        id: file_id,
         level: 0,
         title: file_title,
         content: file_content,
         file_path: file_path.to_string(),
         parent_id: None,
         children_ids: Vec::new(),
-        properties: parsed.frontmatter.clone(),
+        properties,
         tags: parsed.tags.clone(),
+        position: 0, // File block is always first
         created_at: 0, // Will be set on insert
         updated_at: 0, // Will be set on insert
         embedding: None,
+        content_hash: None,
         outgoing_links: parsed
             .wiki_links
             .iter()
@@ -76,23 +83,28 @@ pub fn extract_blocks_from_parsed(
     blocks.push(file_block);
 
     // Create blocks for each heading
-    for heading in parsed.headings.iter() {
+    for (index, heading) in parsed.headings.iter().enumerate() {
         // Determine parent: either the file block or a previous heading with lower level
         let parent_id = find_parent_for_heading(&blocks, heading.level);
 
+        // Generate ID upfront so parent-child relationships can reference it
+        let heading_id = format!("block_{}", uuid::Uuid::new_v4().simple());
+
         let heading_block = Block {
-            id: String::new(),
+            id: heading_id,
             level: heading.level,
             title: heading.title.clone(),
             content: heading.content.clone(),
             file_path: file_path.to_string(),
             parent_id: Some(parent_id),
             children_ids: Vec::new(),
-            properties: HashMap::new(),
+            properties: std::collections::BTreeMap::new(),
             tags: extract_tags_from_content(&heading.content),
+            position: (index + 1) as i32, // Position in document (file is 0, headings are 1+)
             created_at: 0,
             updated_at: 0,
             embedding: None,
+            content_hash: None,
             outgoing_links: extract_links_from_content(&heading.content),
             incoming_links: Vec::new(),
         };
@@ -106,11 +118,30 @@ pub fn extract_blocks_from_parsed(
     Ok(blocks)
 }
 
+/// Convert frontmatter HashMap<String, serde_json::Value> to BTreeMap<String, String>
+fn convert_frontmatter_to_string_map(
+    frontmatter: &std::collections::HashMap<String, serde_json::Value>,
+) -> std::collections::BTreeMap<String, String> {
+    frontmatter
+        .iter()
+        .map(|(k, v)| {
+            let value_str = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Null => "null".to_string(),
+                _ => serde_json::to_string(v).unwrap_or_else(|_| "".to_string()),
+            };
+            (k.clone(), value_str)
+        })
+        .collect()
+}
+
 /// Extract file title from file path or frontmatter
 fn extract_file_title(file_path: &str, parsed: &ParsedDocument) -> String {
     // Try to get title from frontmatter
-    if let Some(title) = parsed.frontmatter.get("title") {
-        if let Some(title_str) = title.as_str() {
+    if let Some(title_value) = parsed.frontmatter.get("title") {
+        if let Some(title_str) = title_value.as_str() {
             return title_str.to_string();
         }
     }
@@ -155,6 +186,8 @@ fn extract_tags_from_content(content: &str) -> Vec<String> {
 
 /// Build parent-child relationships by populating children_ids
 fn build_children_relationships(blocks: &mut [Block]) {
+    use std::collections::HashMap;
+
     // Build a map of parent_id -> list of child IDs (not indices)
     let mut parent_children: HashMap<String, Vec<String>> = HashMap::new();
 

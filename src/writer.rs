@@ -22,9 +22,13 @@ pub fn write_new_file<P: AsRef<Path>>(
     // Build markdown content
     let markdown = build_markdown_from_block(block)?;
 
-    // Write to file
-    std::fs::write(&absolute_path, markdown)
-        .with_context(|| format!("Failed to write file: {}", absolute_path.display()))?;
+    // Write atomically: write to temp file, then rename
+    let temp_path = absolute_path.with_extension("tmp");
+    std::fs::write(&temp_path, &markdown)
+        .with_context(|| format!("Failed to write temp file: {}", temp_path.display()))?;
+
+    std::fs::rename(&temp_path, &absolute_path)
+        .with_context(|| format!("Failed to rename temp file to: {}", absolute_path.display()))?;
 
     info!("✅ Created new file: {}", file_path);
 
@@ -53,9 +57,13 @@ pub fn write_file_from_blocks<P: AsRef<Path>>(
     // Build markdown content
     let markdown = reconstruct_markdown_from_blocks(blocks)?;
 
-    // Write to file
-    std::fs::write(&absolute_path, markdown)
-        .with_context(|| format!("Failed to write file: {}", absolute_path.display()))?;
+    // Write atomically: write to temp file, then rename
+    let temp_path = absolute_path.with_extension("tmp");
+    std::fs::write(&temp_path, &markdown)
+        .with_context(|| format!("Failed to write temp file: {}", temp_path.display()))?;
+
+    std::fs::rename(&temp_path, &absolute_path)
+        .with_context(|| format!("Failed to rename temp file to: {}", absolute_path.display()))?;
 
     debug!("Wrote file: {}", file_path);
 
@@ -89,8 +97,19 @@ fn build_markdown_from_block(block: &Block) -> Result<String> {
 
     // Add frontmatter if present
     if !block.properties.is_empty() {
+        // Convert HashMap<String, String> to HashMap<String, serde_json::Value> for YAML
+        let properties: std::collections::HashMap<String, serde_json::Value> = block
+            .properties
+            .iter()
+            .map(|(k, v)| {
+                // Try to parse as JSON value, otherwise use as string
+                let value = serde_json::from_str(v).unwrap_or(serde_json::Value::String(v.clone()));
+                (k.clone(), value)
+            })
+            .collect();
+
         markdown.push_str("---\n");
-        let yaml = serde_yaml::to_string(&block.properties)
+        let yaml = serde_yaml::to_string(&properties)
             .context("Failed to serialize frontmatter to YAML")?;
         markdown.push_str(&yaml);
         markdown.push_str("---\n\n");
@@ -112,9 +131,9 @@ fn reconstruct_markdown_from_blocks(blocks: &[Block]) -> Result<String> {
         return Ok(String::new());
     }
 
-    // Sort blocks by level and position (file first, then headings in order)
+    // Sort blocks by position to maintain document order
     let mut sorted_blocks = blocks.to_vec();
-    sorted_blocks.sort_by_key(|b| (b.level, b.created_at));
+    sorted_blocks.sort_by_key(|b| b.position);
 
     let file_block = sorted_blocks
         .iter()
@@ -125,8 +144,19 @@ fn reconstruct_markdown_from_blocks(blocks: &[Block]) -> Result<String> {
 
     // Add frontmatter if present
     if !file_block.properties.is_empty() {
+        // Convert HashMap<String, String> to HashMap<String, serde_json::Value> for YAML
+        let properties: std::collections::HashMap<String, serde_json::Value> = file_block
+            .properties
+            .iter()
+            .map(|(k, v)| {
+                // Try to parse as JSON value, otherwise use as string
+                let value = serde_json::from_str(v).unwrap_or(serde_json::Value::String(v.clone()));
+                (k.clone(), value)
+            })
+            .collect();
+
         markdown.push_str("---\n");
-        let yaml = serde_yaml::to_string(&file_block.properties)
+        let yaml = serde_yaml::to_string(&properties)
             .context("Failed to serialize frontmatter to YAML")?;
         markdown.push_str(&yaml);
         markdown.push_str("---\n\n");
@@ -169,8 +199,8 @@ mod tests {
 
     #[test]
     fn test_build_markdown_from_block() {
-        let mut properties = HashMap::new();
-        properties.insert("title".to_string(), serde_json::Value::String("Test".to_string()));
+        let mut properties = std::collections::BTreeMap::new();
+        properties.insert("title".to_string(), "Test".to_string());
 
         let block = Block {
             id: "test".to_string(),
@@ -182,9 +212,11 @@ mod tests {
             children_ids: Vec::new(),
             properties,
             tags: Vec::new(),
+            position: 0,
             created_at: 0,
             updated_at: 0,
             embedding: None,
+            content_hash: None,
             outgoing_links: Vec::new(),
             incoming_links: Vec::new(),
         };
@@ -206,11 +238,13 @@ mod tests {
             file_path: "test.md".to_string(),
             parent_id: None,
             children_ids: vec!["h1".to_string()],
-            properties: HashMap::new(),
+            properties: std::collections::BTreeMap::new(),
             tags: Vec::new(),
+            position: 0,
             created_at: 0,
             updated_at: 0,
             embedding: None,
+            content_hash: None,
             outgoing_links: Vec::new(),
             incoming_links: Vec::new(),
         };
@@ -223,11 +257,13 @@ mod tests {
             file_path: "test.md".to_string(),
             parent_id: Some("file".to_string()),
             children_ids: Vec::new(),
-            properties: HashMap::new(),
+            properties: std::collections::BTreeMap::new(),
             tags: Vec::new(),
+            position: 1,
             created_at: 1,
             updated_at: 1,
             embedding: None,
+            content_hash: None,
             outgoing_links: Vec::new(),
             incoming_links: Vec::new(),
         };
@@ -253,11 +289,13 @@ mod tests {
             file_path: "new.md".to_string(),
             parent_id: None,
             children_ids: Vec::new(),
-            properties: HashMap::new(),
+            properties: std::collections::BTreeMap::new(),
             tags: Vec::new(),
+            position: 0,
             created_at: 0,
             updated_at: 0,
             embedding: None,
+            content_hash: None,
             outgoing_links: Vec::new(),
             incoming_links: Vec::new(),
         };

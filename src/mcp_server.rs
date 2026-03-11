@@ -13,6 +13,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::db::{Block, Database};
 use crate::embeddings::{create_embedding_service, prepare_block_text, EmbeddingService};
+use crate::indexer;
 use crate::reranking::{create_reranking_service, RerankingService};
 use crate::writer;
 
@@ -216,6 +217,46 @@ async fn expand_block_graph(
 }
 
 impl McpServer {
+    /// Automatically re-index a file when database inconsistencies are detected
+    async fn auto_reindex_file(&self, file_path: &str) -> Result<(), McpError> {
+        info!("⚠️  Auto-reindexing file due to database inconsistency: {}", file_path);
+
+        // Build absolute path
+        let absolute_path = std::path::Path::new(&self.config.vault.path).join(file_path);
+
+        // Re-extract blocks from the file
+        let blocks = indexer::extract_blocks_from_file(&absolute_path, &self.config.vault.path)
+            .map_err(|e| McpError::internal_error(format!("Failed to extract blocks: {}", e), None))?;
+
+        let db = self.db.write().await;
+
+        // Delete all existing blocks for this file
+        db.delete_blocks_by_file(file_path)
+            .await
+            .map_err(|e| McpError::internal_error(format!("Failed to delete old blocks: {}", e), None))?;
+
+        // Insert all blocks with embeddings
+        for mut block in blocks {
+            if let Some(embedding_service) = &self.embedding_service {
+                let hash = block.compute_content_hash();
+                let text = prepare_block_text(&block.title, &block.content, 8000);
+                if let Ok(embedding) = embedding_service.embed(text).await {
+                    block.embedding = Some(embedding);
+                    block.content_hash = Some(hash);
+                }
+            }
+
+            db.create_block(block)
+                .await
+                .map_err(|e| McpError::internal_error(format!("Failed to create block: {}", e), None))?;
+        }
+
+        drop(db);
+
+        info!("✅ Successfully re-indexed file: {}", file_path);
+        Ok(())
+    }
+
     /// Create a new MCP server
     pub fn new(db: Arc<RwLock<Database>>, config: Arc<Config>) -> Self {
         // Initialize embedding service if configured
@@ -571,12 +612,14 @@ impl McpServer {
 
         block.parent_id = input.parent_id;
 
-        // Generate embedding if service is available
+        // Compute content hash and generate embedding if service is available
         if let Some(embedding_service) = &self.embedding_service {
+            let hash = block.compute_content_hash();
             let text = prepare_block_text(&block.title, &block.content, 8000);
             match embedding_service.embed(text).await {
                 Ok(embedding) => {
                     block.embedding = Some(embedding);
+                    block.content_hash = Some(hash);
                 }
                 Err(e) => {
                     info!("Failed to generate embedding for new block: {}", e);
@@ -625,13 +668,54 @@ impl McpServer {
         let db = self.db.write().await;
 
         // Get the existing block
-        let mut block = db
-            .get_block(&input.id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(format!("Block not found: {}", input.id), None))?;
+        let block_result = db.get_block(&input.id).await;
 
-        let file_path = block.file_path.clone();
+        let (mut block, file_path) = match block_result {
+            Ok(Some(b)) => {
+                let fp = b.file_path.clone();
+                (b, fp)
+            }
+            Ok(None) | Err(_) => {
+                // Block not found - find the file and re-index it
+                drop(db);
+
+                let db_read = self.db.read().await;
+                let files = db_read.get_all_files().await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let mut target_file = None;
+                for file in files {
+                    let blocks = db_read.get_blocks_by_file(&file.file_path).await
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                    if blocks.iter().any(|b| b.id == input.id) {
+                        target_file = Some(file.file_path.clone());
+                        break;
+                    }
+                }
+                drop(db_read);
+
+                if let Some(fp) = target_file {
+                    // Re-index the file
+                    self.auto_reindex_file(&fp).await?;
+
+                    // Retry getting the block
+                    let db = self.db.write().await;
+                    let b = db.get_block(&input.id).await
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                        .ok_or_else(|| McpError::invalid_request(
+                            format!("Block not found even after re-indexing: {}", input.id),
+                            None
+                        ))?;
+                    let fp2 = b.file_path.clone();
+                    drop(db);
+                    (b, fp2)
+                } else {
+                    return Err(McpError::invalid_request(format!("Block not found: {}", input.id), None));
+                }
+            }
+        };
+
+        let db = self.db.write().await;
 
         // Apply updates
         if let Some(title) = input.title {
@@ -640,18 +724,26 @@ impl McpServer {
 
         if let Some(content) = input.content {
             block.content = content;
+        }
 
-            // Regenerate embedding if content changed and service is available
-            if let Some(embedding_service) = &self.embedding_service {
+        // Regenerate embedding only if content changed (based on hash)
+        if let Some(embedding_service) = &self.embedding_service {
+            let old_hash = block.content_hash.as_deref();
+            if block.content_changed(old_hash) {
+                let hash = block.compute_content_hash();
                 let text = prepare_block_text(&block.title, &block.content, 8000);
                 match embedding_service.embed(text).await {
                     Ok(embedding) => {
                         block.embedding = Some(embedding);
+                        block.content_hash = Some(hash);
+                        info!("Regenerated embedding for updated block (content changed)");
                     }
                     Err(e) => {
                         info!("Failed to regenerate embedding for updated block: {}", e);
                     }
                 }
+            } else {
+                info!("Content hash unchanged, skipping embedding regeneration");
             }
         }
 
@@ -694,11 +786,50 @@ impl McpServer {
         let db = self.db.write().await;
 
         // Get the block to find its file path
-        let block = db
-            .get_block(&input.id)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(format!("Block not found: {}", input.id), None))?;
+        let block_result = db.get_block(&input.id).await;
+
+        let block = match block_result {
+            Ok(Some(b)) => b,
+            Ok(None) | Err(_) => {
+                // Block not found - find the file and re-index it
+                drop(db);
+
+                let db_read = self.db.read().await;
+                let files = db_read.get_all_files().await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let mut target_file = None;
+                for file in files {
+                    let blocks = db_read.get_blocks_by_file(&file.file_path).await
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                    if blocks.iter().any(|b2| b2.id == input.id) {
+                        target_file = Some(file.file_path.clone());
+                        break;
+                    }
+                }
+                drop(db_read);
+
+                if let Some(fp) = target_file {
+                    // Re-index the file
+                    self.auto_reindex_file(&fp).await?;
+
+                    // Retry getting the block
+                    let db = self.db.write().await;
+                    let b = db.get_block(&input.id).await
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                        .ok_or_else(|| McpError::invalid_request(
+                            format!("Block not found even after re-indexing: {}", input.id),
+                            None
+                        ))?;
+                    drop(db);
+                    b
+                } else {
+                    return Err(McpError::invalid_request(format!("Block not found: {}", input.id), None));
+                }
+            }
+        };
+
+        let db = self.db.write().await;
 
         let file_path = block.file_path.clone();
         let is_file = block.level == 0;
@@ -778,12 +909,14 @@ impl McpServer {
         }
         block.content.push_str(&input.content);
 
-        // Regenerate embedding if service is available
+        // Regenerate embedding with new hash
         if let Some(embedding_service) = &self.embedding_service {
+            let hash = block.compute_content_hash();
             let text = prepare_block_text(&block.title, &block.content, 8000);
             match embedding_service.embed(text).await {
                 Ok(embedding) => {
                     block.embedding = Some(embedding);
+                    block.content_hash = Some(hash);
                 }
                 Err(e) => {
                     info!("Failed to regenerate embedding for appended block: {}", e);
@@ -1035,6 +1168,7 @@ impl McpServer {
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
 }
 
 // Implement the server handler

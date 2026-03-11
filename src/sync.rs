@@ -65,9 +65,10 @@ impl Synchronizer {
             // Generate embeddings
             match service.embed_batch(texts).await {
                 Ok(embeddings) => {
-                    // Assign embeddings to blocks
+                    // Assign embeddings and compute hashes for blocks
                     for (block, embedding) in blocks.iter_mut().zip(embeddings) {
                         block.embedding = Some(embedding);
+                        block.content_hash = Some(block.compute_content_hash());
                     }
                     debug!("✅ Generated {} embeddings", blocks.len());
                 }
@@ -162,6 +163,12 @@ impl Synchronizer {
     async fn update_backlinks(&self) -> Result<()> {
         info!("Building backlink relationships...");
 
+        // TODO: Temporarily disabled due to SurrealDB deserialization bug
+        info!("⚠️  Skipping backlink building due to SurrealDB deserialization issue");
+        return Ok(());
+
+        #[allow(unreachable_code)]
+        {
         let db = self.db.read().await;
 
         // Get all blocks (using a large limit instead of usize::MAX to avoid overflow)
@@ -216,6 +223,7 @@ impl Synchronizer {
 
         info!("Backlink relationships updated");
         Ok(())
+        }
     }
 
     /// Index a single file
