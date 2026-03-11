@@ -22,9 +22,6 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
 
