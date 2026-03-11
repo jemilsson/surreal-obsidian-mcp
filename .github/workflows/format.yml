@@ -1,0 +1,73 @@
+name: Format Check
+
+on:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Check formatting
+        run: |
+          if ! nix develop --command cargo fmt --all -- --check; then
+            echo "Code is not properly formatted. Running cargo fmt..."
+            nix develop --command cargo fmt --all
+            echo "::error::Code formatting issues found. Please run 'cargo fmt --all' to fix them."
+            echo "::notice::You can also run 'nix develop --command cargo fmt --all' if using Nix"
+            git diff --name-only
+            exit 1
+          else
+            echo "✅ Code is properly formatted"
+          fi
+
+  format-suggestion:
+    name: Auto-format Suggestion
+    runs-on: ubuntu-latest
+    if: failure()
+    needs: format
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Format code
+        run: nix develop --command cargo fmt --all
+
+      - name: Create suggestion comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔧 Formatting Required
+
+This PR has formatting issues. Please run one of the following commands to fix them:
+
+\`\`\`bash
+# Using cargo directly
+cargo fmt --all
+
+# Using Nix (recommended)
+nix develop --command cargo fmt --all
+\`\`\`
+
+The CI will pass once the code is properly formatted. You can also set up your editor to format on save using rustfmt.`
+            })
