@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 # MCP Protocol
-rmcp = { version = "0.16", features = ["server", "macros", "schemars", "transport-io"] }
+rmcp = { version = "0.16", features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
 
 # HTTP/SSE transport for OpenWebUI
 axum = { version = "0.8", features = ["macros"] }
