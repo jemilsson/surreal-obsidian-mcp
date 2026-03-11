@@ -56,7 +56,6 @@ pub async fn start_http_server(server: Arc<McpServer>, port: u16) -> Result<()> 
 
     // Create axum router: REST vault API + search + MCP fallback
     let app = Router::new()
-        .route("/", get(|| async { axum::response::Redirect::to("/docs") }))
         .route("/docs", get(docs_handler))
         .route("/vault/{*path}", get(vault_handler))
         .route("/search", get(search_handler).post(search_handler_post))
