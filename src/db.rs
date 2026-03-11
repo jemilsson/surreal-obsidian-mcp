@@ -465,6 +465,19 @@ impl Database {
         Ok(BlockRecord::to_blocks(records))
     }
 
+    /// Delete all blocks (used before re-indexing to prevent duplicates on restart)
+    pub async fn clear_all_blocks(&self) -> Result<()> {
+        let _: Vec<serde_json::Value> = self
+            .db
+            .query("DELETE FROM blocks")
+            .await
+            .context("Failed to clear all blocks")?
+            .take(0)
+            .context("Failed to parse delete result")?;
+
+        Ok(())
+    }
+
     /// Delete all blocks for a specific file
     pub async fn delete_blocks_by_file(&self, file_path: &str) -> Result<()> {
         let _: Vec<serde_json::Value> = self

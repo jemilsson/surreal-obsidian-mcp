@@ -132,19 +132,16 @@ pub fn scan_vault<P: AsRef<Path>>(vault_path: P) -> Result<Vec<PathBuf>> {
     for entry in walkdir::WalkDir::new(vault_path)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|e| {
+            // Prune hidden directories (e.g. .trash, .obsidian) from traversal entirely
+            !e.file_name()
+                .to_str()
+                .map(|n| n.starts_with('.'))
+                .unwrap_or(false)
+        })
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-
-        // Skip hidden files and directories
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with('.'))
-            .unwrap_or(false)
-        {
-            continue;
-        }
 
         // Check if it's a markdown file
         if path.is_file() {

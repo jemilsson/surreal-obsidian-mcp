@@ -91,6 +91,12 @@ impl Synchronizer {
 
         info!("Starting initial vault indexing...");
 
+        // Clear existing blocks to prevent duplicates on restart
+        {
+            let db = self.db.write().await;
+            db.clear_all_blocks().await?;
+        }
+
         // Scan for all markdown files
         let files = scan_vault(&self.config.vault.path)?;
         info!("Found {} files to index", files.len());
