@@ -1,26 +1,86 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 use surrealdb::engine::local::{Db, SurrealKv};
-use surrealdb::sql::Thing;
 use surrealdb::Surreal;
+use surrealdb_types::{RecordId, SurrealValue};
 use tracing::info;
 use uuid::Uuid;
 
-fn deserialize_thing_to_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let thing = Thing::deserialize(deserializer)?;
-    Ok(thing.id.to_string())
+/// Internal database record with RecordId for SurrealDB 3.0 compatibility
+#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+struct BlockRecord {
+    id: RecordId,
+    level: u8,
+    title: String,
+    content: String,
+    file_path: String,
+    #[serde(default)]
+    parent_id: Option<String>,
+    #[serde(default)]
+    children_ids: Vec<String>,
+    #[serde(default)]
+    properties: BTreeMap<String, String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    position: i32,
+    created_at: i64,
+    updated_at: i64,
+    #[serde(default)]
+    embedding: Option<Vec<f32>>,
+    #[serde(default)]
+    content_hash: Option<String>,
+    #[serde(default)]
+    outgoing_links: Vec<String>,
+    #[serde(default)]
+    incoming_links: Vec<String>,
+}
+
+impl BlockRecord {
+    /// Convert BlockRecord to Block by extracting the ID string
+    fn to_block(self) -> Block {
+        // The RecordId.key can be a String, Number, or other types
+        // We need to extract just the value without the Debug wrapper
+        let key_string = format!("{:?}", self.id.key);
+        // Remove "String(" prefix and ")" suffix if present, then trim quotes
+        let id = if key_string.starts_with("String(\"") && key_string.ends_with("\")") {
+            key_string[8..key_string.len()-2].to_string()
+        } else {
+            key_string.trim_matches('"').to_string()
+        };
+
+        Block {
+            id,
+            level: self.level,
+            title: self.title,
+            content: self.content,
+            file_path: self.file_path,
+            parent_id: self.parent_id,
+            children_ids: self.children_ids,
+            properties: self.properties,
+            tags: self.tags,
+            position: self.position,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            embedding: self.embedding,
+            content_hash: self.content_hash,
+            outgoing_links: self.outgoing_links,
+            incoming_links: self.incoming_links,
+        }
+    }
+
+    /// Convert a vector of BlockRecords to Blocks
+    fn to_blocks(records: Vec<BlockRecord>) -> Vec<Block> {
+        records.into_iter().map(|r| r.to_block()).collect()
+    }
 }
 
 /// Block represents a piece of content in the vault
 /// Level 0 = file/document, Level 1-6 = headings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
-    #[serde(deserialize_with = "deserialize_thing_to_string")]
     pub id: String,
     pub level: u8, // 0 for files, 1-6 for headings
     pub title: String,
@@ -54,9 +114,6 @@ pub struct Block {
 pub struct Database {
     db: Surreal<Db>,
 }
-
-// SQL fragment to select all fields except embedding (to reduce response size)
-const SELECT_BLOCK_FIELDS: &str = "id, level, title, content, file_path, parent_id, children_ids, properties, tags, position, created_at, updated_at, outgoing_links, incoming_links";
 
 impl Database {
     /// Create a new database connection
@@ -116,47 +173,71 @@ impl Database {
 
         let block_id = block.id.clone();
 
-        let created: Option<Block> = self
-            .db
-            .create(("blocks", block_id.as_str()))
-            .content(block)
-            .await
-            .context("Failed to create block")?;
+        // Convert Block to JSON, excluding the id field and null values
+        let mut block_json = serde_json::to_value(&block)
+            .context("Failed to serialize block")?;
+        if let Some(obj) = block_json.as_object_mut() {
+            obj.remove("id");
+            // Remove null values to avoid SurrealDB deserialization issues
+            obj.retain(|_, v| !v.is_null());
+        }
 
-        created.context("No block returned after creation")
+        // Use insert method for SurrealDB 3.0 - ignore the response to avoid RecordId deserialization
+        let _: Option<serde_json::Value> = self
+            .db
+            .insert(("blocks", block_id.as_str()))
+            .content(block_json)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to insert block with ID {}: {:?}", block_id, e))?;
+
+        // Query the block back using our SELECT_BLOCK_FIELDS which converts RecordId to String
+        self.get_block(&block_id)
+            .await?
+            .context("Block not found after creation")
     }
 
     /// Get a block by ID
     pub async fn get_block(&self, id: &str) -> Result<Option<Block>> {
-        let mut result: Vec<Block> = self
+        // Use BlockRecord for database operations, convert to Block
+        let result: Option<BlockRecord> = self
             .db
-            .query(format!("SELECT {} FROM blocks WHERE id = $id", SELECT_BLOCK_FIELDS))
-            .bind(("id", id.to_string()))
+            .select(("blocks", id))
             .await
-            .context("Failed to get block")?
-            .take(0)
-            .context("Failed to parse query result")?;
+            .context("Failed to get block")?;
 
-        Ok(result.pop())
+        Ok(result.map(|record| record.to_block()))
     }
 
     /// Update a block
     pub async fn update_block(&self, id: &str, mut block: Block) -> Result<Block> {
         block.updated_at = chrono::Utc::now().timestamp();
 
-        let updated: Option<Block> = self
+        // Convert Block to JSON, excluding the id field and null values
+        let mut block_json = serde_json::to_value(&block)
+            .context("Failed to serialize block")?;
+        if let Some(obj) = block_json.as_object_mut() {
+            obj.remove("id");
+            // Remove null values to avoid SurrealDB deserialization issues
+            obj.retain(|_, v| !v.is_null());
+        }
+
+        // Update without deserializing response to avoid RecordId issues
+        let _: Option<serde_json::Value> = self
             .db
             .update(("blocks", id))
-            .content(block)
+            .content(block_json)
             .await
             .context("Failed to update block")?;
 
-        updated.context("Block not found")
+        // Query the block back using our SELECT_BLOCK_FIELDS which converts RecordId to String
+        self.get_block(id)
+            .await?
+            .context("Block not found after update")
     }
 
     /// Delete a block
     pub async fn delete_block(&self, id: &str) -> Result<()> {
-        let _: Option<Block> = self
+        let _: Option<serde_json::Value> = self
             .db
             .delete(("blocks", id))
             .await
@@ -167,35 +248,35 @@ impl Database {
 
     /// Get all blocks for a file
     pub async fn get_blocks_by_file(&self, file_path: &str) -> Result<Vec<Block>> {
-        let blocks: Vec<Block> = self
+        let records: Vec<BlockRecord> = self
             .db
-            .query(format!("SELECT {} FROM blocks WHERE file_path = $path ORDER BY level ASC", SELECT_BLOCK_FIELDS))
+            .query("SELECT * FROM blocks WHERE file_path = $path ORDER BY level ASC")
             .bind(("path", file_path.to_string()))
             .await
             .context("Failed to query blocks by file")?
             .take(0)
             .context("Failed to parse query result")?;
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Get children of a block
     pub async fn get_children(&self, parent_id: &str) -> Result<Vec<Block>> {
-        let blocks: Vec<Block> = self
+        let records: Vec<BlockRecord> = self
             .db
-            .query(format!("SELECT {} FROM blocks WHERE parent_id = $parent ORDER BY created_at ASC", SELECT_BLOCK_FIELDS))
+            .query("SELECT * FROM blocks WHERE parent_id = $parent ORDER BY created_at ASC")
             .bind(("parent", parent_id.to_string()))
             .await
             .context("Failed to query child blocks")?
             .take(0)
             .context("Failed to parse query result")?;
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Search blocks by content (simple text search for now)
     pub async fn search_blocks(&self, query: &str, limit: usize) -> Result<Vec<Block>> {
-        let blocks: Vec<Block> = if query.is_empty() {
+        let records: Vec<BlockRecord> = if query.is_empty() {
             // If query is empty, return all blocks using select() API
             self.db
                 .select("blocks")
@@ -204,12 +285,12 @@ impl Database {
         } else {
             // Search with query string
             self.db
-                .query(format!(
+                .query(
                     "SELECT * FROM blocks
                      WHERE string::lowercase(title) CONTAINS string::lowercase($query)
                         OR string::lowercase(content) CONTAINS string::lowercase($query)
                      LIMIT $limit"
-                ))
+                )
                 .bind(("query", query.to_string()))
                 .bind(("limit", limit))
                 .await
@@ -218,20 +299,20 @@ impl Database {
                 .context("Failed to parse query result")?
         };
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Get all root blocks (level 0 - files)
     pub async fn get_all_files(&self) -> Result<Vec<Block>> {
-        let blocks: Vec<Block> = self
+        let records: Vec<BlockRecord> = self
             .db
-            .query(format!("SELECT {} FROM blocks WHERE level = 0 ORDER BY file_path ASC", SELECT_BLOCK_FIELDS))
+            .query("SELECT * FROM blocks WHERE level = 0 ORDER BY file_path ASC")
             .await
             .context("Failed to query files")?
             .take(0)
             .context("Failed to parse query result")?;
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Search for similar blocks using vector similarity
@@ -239,16 +320,14 @@ impl Database {
     pub async fn search_similar(&self, embedding: Vec<f32>, limit: usize) -> Result<Vec<Block>> {
         // Use SurrealDB's vector::similarity function to find similar embeddings
         // This performs cosine similarity search
-        // Note: We exclude the embedding field from results to reduce response size
-        let blocks: Vec<Block> = self
+        let records: Vec<BlockRecord> = self
             .db
-            .query(format!(
-                "SELECT {} FROM blocks
+            .query(
+                "SELECT * FROM blocks
                  WHERE embedding IS NOT NONE
                  ORDER BY vector::similarity::cosine(embedding, $query_embedding) DESC
-                 LIMIT $limit",
-                SELECT_BLOCK_FIELDS
-            ))
+                 LIMIT $limit"
+            )
             .bind(("query_embedding", embedding))
             .bind(("limit", limit))
             .await
@@ -256,12 +335,12 @@ impl Database {
             .take(0)
             .context("Failed to parse query result")?;
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Get blocks that need embeddings (blocks without embeddings)
     pub async fn get_blocks_without_embeddings(&self, limit: usize) -> Result<Vec<Block>> {
-        let blocks: Vec<Block> = self
+        let records: Vec<BlockRecord> = self
             .db
             .query(
                 "SELECT * FROM blocks
@@ -274,7 +353,7 @@ impl Database {
             .take(0)
             .context("Failed to parse query result")?;
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Get blocks that this block links to (outgoing links)
@@ -290,20 +369,19 @@ impl Database {
         // Find blocks where the title or file_path matches any of the link targets
         let mut linked_blocks = Vec::new();
         for link_target in &block.outgoing_links {
-            let blocks: Vec<Block> = self
+            let records: Vec<BlockRecord> = self
                 .db
-                .query(format!(
-                    "SELECT {} FROM blocks
-                     WHERE title = $target OR file_path = $target",
-                    SELECT_BLOCK_FIELDS
-                ))
+                .query(
+                    "SELECT * FROM blocks
+                     WHERE title = $target OR file_path = $target"
+                )
                 .bind(("target", link_target.clone()))
                 .await
                 .context("Failed to query linked blocks")?
                 .take(0)
                 .context("Failed to parse query result")?;
 
-            linked_blocks.extend(blocks);
+            linked_blocks.extend(BlockRecord::to_blocks(records));
         }
 
         Ok(linked_blocks)
@@ -332,14 +410,13 @@ impl Database {
 
     /// Find blocks by tag
     pub async fn find_by_tag(&self, tag: &str, limit: usize) -> Result<Vec<Block>> {
-        let blocks: Vec<Block> = self
+        let records: Vec<BlockRecord> = self
             .db
-            .query(format!(
-                "SELECT {} FROM blocks
+            .query(
+                "SELECT * FROM blocks
                  WHERE $tag IN tags
-                 LIMIT $limit",
-                SELECT_BLOCK_FIELDS
-            ))
+                 LIMIT $limit"
+            )
             .bind(("tag", tag.to_string()))
             .bind(("limit", limit))
             .await
@@ -347,12 +424,12 @@ impl Database {
             .take(0)
             .context("Failed to parse query result")?;
 
-        Ok(blocks)
+        Ok(BlockRecord::to_blocks(records))
     }
 
     /// Delete all blocks for a specific file
     pub async fn delete_blocks_by_file(&self, file_path: &str) -> Result<()> {
-        let _: Vec<Block> = self
+        let _: Vec<serde_json::Value> = self
             .db
             .query("DELETE FROM blocks WHERE file_path = $path")
             .bind(("path", file_path.to_string()))

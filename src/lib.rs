@@ -6,5 +6,6 @@ pub mod mcp_server;
 pub mod parser;
 pub mod reranking;
 pub mod sync;
+pub mod transport;
 pub mod watcher;
 pub mod writer;

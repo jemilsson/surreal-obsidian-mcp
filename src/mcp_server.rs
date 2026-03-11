@@ -217,6 +217,16 @@ async fn expand_block_graph(
 }
 
 impl McpServer {
+    /// List all available tools
+    pub fn list_tools(&self) -> Vec<Tool> {
+        self.tool_router.list_tools()
+    }
+
+    /// Call a tool by name with arguments
+    pub async fn call_tool(&self, request: CallToolRequest) -> Result<CallToolResult, McpError> {
+        self.tool_router.call_tool(self, request).await
+    }
+
     /// Automatically re-index a file when database inconsistencies are detected
     async fn auto_reindex_file(&self, file_path: &str) -> Result<(), McpError> {
         info!("⚠️  Auto-reindexing file due to database inconsistency: {}", file_path);

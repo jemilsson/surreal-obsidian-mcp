@@ -13,6 +13,8 @@ pub struct Config {
     pub sync: SyncConfig,
     #[serde(default)]
     pub graph: GraphConfig,
+    #[serde(default)]
+    pub transport: TransportConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -96,6 +98,24 @@ pub struct GraphConfig {
     pub extract_mentions: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TransportConfig {
+    #[serde(default = "default_transport_type")]
+    pub transport_type: TransportType,
+    /// Port for HTTP/SSE transport (default: 3000)
+    #[serde(default = "default_http_port")]
+    pub http_port: u16,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TransportType {
+    /// Standard I/O transport (for Claude Desktop)
+    Stdio,
+    /// HTTP/SSE transport (for OpenWebUI)
+    Http,
+}
+
 // Default value functions
 fn default_true() -> bool {
     true
@@ -111,6 +131,14 @@ fn default_top_n() -> usize {
 
 fn default_batch_size() -> usize {
     100
+}
+
+fn default_transport_type() -> TransportType {
+    TransportType::Stdio
+}
+
+fn default_http_port() -> u16 {
+    3000
 }
 
 impl Default for RerankingConfig {
@@ -144,6 +172,15 @@ impl Default for GraphConfig {
             extract_backlinks: true,
             extract_tags: true,
             extract_mentions: true,
+        }
+    }
+}
+
+impl Default for TransportConfig {
+    fn default() -> Self {
+        Self {
+            transport_type: default_transport_type(),
+            http_port: default_http_port(),
         }
     }
 }

@@ -6,10 +6,11 @@ use tokio::sync::RwLock;
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use surreal_obsidian_mcp::config::Config;
+use surreal_obsidian_mcp::config::{Config, TransportType};
 use surreal_obsidian_mcp::db::Database;
 use surreal_obsidian_mcp::mcp_server::McpServer;
 use surreal_obsidian_mcp::sync::Synchronizer;
+use surreal_obsidian_mcp::transport::http;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -76,10 +77,21 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Start MCP server
+    // Start MCP server with appropriate transport
     info!("✅ Starting MCP server...");
-    let server = McpServer::new(db, config);
-    server.run().await?;
+    let server = McpServer::new(db.clone(), config.clone());
+
+    match config.transport.transport_type {
+        TransportType::Stdio => {
+            info!("   Transport: stdio (for Claude Desktop)");
+            server.run().await?;
+        }
+        TransportType::Http => {
+            info!("   Transport: HTTP/SSE (for OpenWebUI)");
+            info!("   Port: {}", config.transport.http_port);
+            http::start_http_server(Arc::new(server), config.transport.http_port).await?;
+        }
+    }
 
     info!("👋 Shutting down...");
 

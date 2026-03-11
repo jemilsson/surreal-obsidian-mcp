@@ -365,4 +365,142 @@ Content with [[link]].
         assert_eq!(blocks[0].file_path, "test.md");
         assert_eq!(blocks[0].title, "Test File");
     }
+
+    /// Test that block IDs are generated upfront and relationships use valid IDs
+    #[test]
+    fn test_block_ids_are_valid() {
+        let markdown = r#"# H1
+
+Content for H1.
+
+## H2
+
+Content for H2.
+
+### H3
+
+Content for H3."#;
+
+        let parsed = parse_markdown(markdown).unwrap();
+        let blocks = extract_blocks_from_parsed("test.md", markdown, &parsed).unwrap();
+
+        // All blocks should have non-empty IDs
+        for block in &blocks {
+            assert!(!block.id.is_empty(), "Block {} has empty ID", block.title);
+            assert!(block.id.starts_with("block_"), "Block ID should start with 'block_'");
+        }
+
+        // Parent IDs should reference existing block IDs
+        for block in &blocks {
+            if let Some(parent_id) = &block.parent_id {
+                assert!(!parent_id.is_empty(), "Block {} has empty parent_id", block.title);
+                assert!(
+                    blocks.iter().any(|b| &b.id == parent_id),
+                    "Block {} references non-existent parent {}",
+                    block.title,
+                    parent_id
+                );
+            }
+        }
+
+        // Children IDs should reference existing block IDs
+        for block in &blocks {
+            for child_id in &block.children_ids {
+                assert!(!child_id.is_empty(), "Block {} has empty child_id", block.title);
+                assert!(
+                    blocks.iter().any(|b| &b.id == child_id),
+                    "Block {} references non-existent child {}",
+                    block.title,
+                    child_id
+                );
+            }
+        }
+    }
+
+    /// Test that position field is set correctly for ordering
+    #[test]
+    fn test_position_ordering() {
+        let markdown = r#"# First
+
+Content.
+
+## Second
+
+Content.
+
+### Third
+
+Content.
+
+## Fourth
+
+Content."#;
+
+        let parsed = parse_markdown(markdown).unwrap();
+        let blocks = extract_blocks_from_parsed("test.md", markdown, &parsed).unwrap();
+
+        // File block should be position 0
+        assert_eq!(blocks[0].position, 0);
+
+        // Headings should be sequentially numbered
+        for (index, block) in blocks.iter().skip(1).enumerate() {
+            assert_eq!(block.position, (index + 1) as i32);
+        }
+
+        // Verify all positions are unique
+        let mut positions: Vec<i32> = blocks.iter().map(|b| b.position).collect();
+        positions.sort();
+        positions.dedup();
+        assert_eq!(positions.len(), blocks.len(), "Positions are not unique");
+    }
+
+    /// Test round-trip: markdown -> blocks -> markdown preserves structure
+    #[test]
+    fn test_markdown_round_trip() {
+        use crate::writer::write_file_from_blocks;
+
+        let original = r#"---
+title: Test Note
+author: Alice
+---
+
+Introduction paragraph.
+
+# First Heading
+
+Content for first heading.
+
+## Subsection
+
+Content for subsection.
+
+# Second Heading
+
+Content for second heading.
+"#;
+
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path();
+
+        // Parse and extract blocks
+        let parsed = parse_markdown(original).unwrap();
+        let blocks = extract_blocks_from_parsed("test.md", original, &parsed).unwrap();
+
+        // Write blocks back to file
+        let written_path = write_file_from_blocks(vault_path, "test.md", &blocks).unwrap();
+
+        // Read the written file
+        let reconstructed = fs::read_to_string(written_path).unwrap();
+
+        // Verify structure is preserved
+        assert!(reconstructed.contains("title: Test Note"));
+        assert!(reconstructed.contains("author: Alice"));
+        assert!(reconstructed.contains("Introduction paragraph."));
+        assert!(reconstructed.contains("# First Heading"));
+        assert!(reconstructed.contains("## Subsection"));
+        assert!(reconstructed.contains("# Second Heading"));
+        assert!(reconstructed.contains("Content for first heading."));
+        assert!(reconstructed.contains("Content for subsection."));
+        assert!(reconstructed.contains("Content for second heading."));
+    }
 }
