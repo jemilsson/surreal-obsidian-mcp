@@ -47,7 +47,7 @@ impl BlockRecord {
         let key_string = format!("{:?}", self.id.key);
         // Remove "String(" prefix and ")" suffix if present, then trim quotes
         let id = if key_string.starts_with("String(\"") && key_string.ends_with("\")") {
-            key_string[8..key_string.len()-2].to_string()
+            key_string[8..key_string.len() - 2].to_string()
         } else {
             key_string.trim_matches('"').to_string()
         };
@@ -179,8 +179,7 @@ impl Database {
         let block_id = block.id.clone();
 
         // Convert Block to JSON, excluding the id field and null values
-        let mut block_json = serde_json::to_value(&block)
-            .context("Failed to serialize block")?;
+        let mut block_json = serde_json::to_value(&block).context("Failed to serialize block")?;
         if let Some(obj) = block_json.as_object_mut() {
             obj.remove("id");
             // Remove null values to avoid SurrealDB deserialization issues
@@ -243,8 +242,7 @@ impl Database {
         block.updated_at = chrono::Utc::now().timestamp();
 
         // Convert Block to JSON, excluding the id field and null values
-        let mut block_json = serde_json::to_value(&block)
-            .context("Failed to serialize block")?;
+        let mut block_json = serde_json::to_value(&block).context("Failed to serialize block")?;
         if let Some(obj) = block_json.as_object_mut() {
             obj.remove("id");
             // Remove null values to avoid SurrealDB deserialization issues
@@ -319,7 +317,7 @@ impl Database {
                     "SELECT * FROM blocks
                      WHERE string::lowercase(title) CONTAINS string::lowercase($query)
                         OR string::lowercase(content) CONTAINS string::lowercase($query)
-                     LIMIT $limit"
+                     LIMIT $limit",
                 )
                 .bind(("query", query.to_string()))
                 .bind(("limit", limit))
@@ -356,7 +354,7 @@ impl Database {
                 "SELECT * FROM blocks
                  WHERE embedding IS NOT NONE
                  ORDER BY vector::similarity::cosine(embedding, $query_embedding) DESC
-                 LIMIT $limit"
+                 LIMIT $limit",
             )
             .bind(("query_embedding", embedding))
             .bind(("limit", limit))
@@ -375,7 +373,7 @@ impl Database {
             .query(
                 "SELECT * FROM blocks
                  WHERE embedding IS NONE
-                 LIMIT $limit"
+                 LIMIT $limit",
             )
             .bind(("limit", limit))
             .await
@@ -389,8 +387,7 @@ impl Database {
     /// Get blocks that this block links to (outgoing links)
     pub async fn get_linked_blocks(&self, block_id: &str) -> Result<Vec<Block>> {
         // Get the source block
-        let block = self.get_block(block_id).await?
-            .context("Block not found")?;
+        let block = self.get_block(block_id).await?.context("Block not found")?;
 
         if block.outgoing_links.is_empty() {
             return Ok(Vec::new());
@@ -403,7 +400,7 @@ impl Database {
                 .db
                 .query(
                     "SELECT * FROM blocks
-                     WHERE title = $target OR file_path = $target"
+                     WHERE title = $target OR file_path = $target",
                 )
                 .bind(("target", link_target.clone()))
                 .await
@@ -420,8 +417,7 @@ impl Database {
     /// Get blocks that link to this block (incoming links/backlinks)
     pub async fn get_backlinks(&self, block_id: &str) -> Result<Vec<Block>> {
         // Get the target block
-        let block = self.get_block(block_id).await?
-            .context("Block not found")?;
+        let block = self.get_block(block_id).await?.context("Block not found")?;
 
         if block.incoming_links.is_empty() {
             return Ok(Vec::new());
@@ -445,7 +441,7 @@ impl Database {
             .query(
                 "SELECT * FROM blocks
                  WHERE $tag IN tags
-                 LIMIT $limit"
+                 LIMIT $limit",
             )
             .bind(("tag", tag.to_string()))
             .bind(("limit", limit))
@@ -560,7 +556,12 @@ mod tests {
         let db = Database::new(&db_path).await.unwrap();
 
         // Create
-        let block = Block::new(0, "Test Note".to_string(), "Content here".to_string(), "test.md".to_string());
+        let block = Block::new(
+            0,
+            "Test Note".to_string(),
+            "Content here".to_string(),
+            "test.md".to_string(),
+        );
         let created = db.create_block(block).await.unwrap();
         assert!(!created.id.is_empty());
         assert_eq!(created.title, "Test Note");

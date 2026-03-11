@@ -46,10 +46,11 @@ pub async fn start_http_server(server: Arc<McpServer>, port: u16) -> Result<()> 
         .allow_headers(Any);
 
     // Create axum router with the rmcp HTTP service as a tower service
-    let app = Router::new()
-        .fallback_service(tower::ServiceBuilder::new()
+    let app = Router::new().fallback_service(
+        tower::ServiceBuilder::new()
             .layer(cors)
-            .service(http_service));
+            .service(http_service),
+    );
 
     // Bind and serve
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));

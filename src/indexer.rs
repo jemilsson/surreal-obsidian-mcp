@@ -6,10 +6,7 @@ use crate::parser::{parse_markdown, ParsedDocument};
 
 /// Extract blocks from a markdown file
 /// Returns a vector of blocks: first is the file (level 0), then headings (level 1-6)
-pub fn extract_blocks_from_file<P: AsRef<Path>>(
-    file_path: P,
-    vault_root: P,
-) -> Result<Vec<Block>> {
+pub fn extract_blocks_from_file<P: AsRef<Path>>(file_path: P, vault_root: P) -> Result<Vec<Block>> {
     let absolute_path = file_path.as_ref();
     let vault_root = vault_root.as_ref();
 
@@ -68,7 +65,7 @@ pub fn extract_blocks_from_parsed(
         children_ids: Vec::new(),
         properties,
         tags: parsed.tags.clone(),
-        position: 0, // File block is always first
+        position: 0,   // File block is always first
         created_at: 0, // Will be set on insert
         updated_at: 0, // Will be set on insert
         embedding: None,
@@ -97,7 +94,11 @@ pub fn extract_blocks_from_parsed(
             title: heading.title.clone(),
             content: heading.content.clone(),
             file_path: file_path.to_string(),
-            content_address: Block::generate_content_address(file_path, heading.level, &heading.title),
+            content_address: Block::generate_content_address(
+                file_path,
+                heading.level,
+                &heading.title,
+            ),
             parent_id: Some(parent_id),
             children_ids: Vec::new(),
             properties: std::collections::BTreeMap::new(),
@@ -389,13 +390,20 @@ Content for H3."#;
         // All blocks should have non-empty IDs
         for block in &blocks {
             assert!(!block.id.is_empty(), "Block {} has empty ID", block.title);
-            assert!(block.id.starts_with("block_"), "Block ID should start with 'block_'");
+            assert!(
+                block.id.starts_with("block_"),
+                "Block ID should start with 'block_'"
+            );
         }
 
         // Parent IDs should reference existing block IDs
         for block in &blocks {
             if let Some(parent_id) = &block.parent_id {
-                assert!(!parent_id.is_empty(), "Block {} has empty parent_id", block.title);
+                assert!(
+                    !parent_id.is_empty(),
+                    "Block {} has empty parent_id",
+                    block.title
+                );
                 assert!(
                     blocks.iter().any(|b| &b.id == parent_id),
                     "Block {} references non-existent parent {}",
@@ -408,7 +416,11 @@ Content for H3."#;
         // Children IDs should reference existing block IDs
         for block in &blocks {
             for child_id in &block.children_ids {
-                assert!(!child_id.is_empty(), "Block {} has empty child_id", block.title);
+                assert!(
+                    !child_id.is_empty(),
+                    "Block {} has empty child_id",
+                    block.title
+                );
                 assert!(
                     blocks.iter().any(|b| &b.id == child_id),
                     "Block {} references non-existent child {}",

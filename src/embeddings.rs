@@ -16,10 +16,7 @@ pub trait EmbeddingService: Send + Sync {
     /// Generate embedding for a single text
     async fn embed(&self, text: String) -> Result<Vec<f32>> {
         let results = self.embed_batch(vec![text]).await?;
-        results
-            .into_iter()
-            .next()
-            .context("No embedding returned")
+        results.into_iter().next().context("No embedding returned")
     }
 
     /// Get the dimension of the embeddings
@@ -186,7 +183,10 @@ impl EmbeddingService for OllamaEmbeddings {
             return Ok(Vec::new());
         }
 
-        debug!("Generating embeddings for {} texts using Ollama", texts.len());
+        debug!(
+            "Generating embeddings for {} texts using Ollama",
+            texts.len()
+        );
 
         // Ollama doesn't support batch embeddings, so we need to call it for each text
         let mut embeddings = Vec::new();

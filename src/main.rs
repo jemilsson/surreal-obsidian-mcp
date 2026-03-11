@@ -33,7 +33,11 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Initialize tracing
-    let log_level = if args.debug { Level::DEBUG } else { Level::INFO };
+    let log_level = if args.debug {
+        Level::DEBUG
+    } else {
+        Level::INFO
+    };
     let subscriber = FmtSubscriber::builder()
         .with_max_level(log_level)
         .with_target(false)
@@ -50,7 +54,14 @@ async fn main() -> Result<()> {
     info!("   Vault: {}", config.vault.path.display());
     info!("   Database: {}", config.database.path.display());
     info!("   Embedding provider: {:?}", config.embedding.provider);
-    info!("   Reranking: {}", if config.reranking.enabled { "enabled" } else { "disabled" });
+    info!(
+        "   Reranking: {}",
+        if config.reranking.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
 
     // Initialize SurrealDB
     let db = Database::new(&config.database.path).await?;

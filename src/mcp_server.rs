@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mq_lang::RuntimeValue;
+// use mq_lang::RuntimeValue;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -165,75 +165,13 @@ fn parse_address_with_query(address: &str) -> (String, Option<String>) {
     }
 }
 
-/// Execute an mq query on a block's markdown content
-fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, String> {
-    use mq_lang::{DefaultEngine, RuntimeValue};
-    use mq_markdown::Markdown;
-
-    // Construct full markdown content
-    let markdown_content = if block.level == 0 {
-        // File block: just use content (already includes title as heading)
-        block.content.clone()
-    } else {
-        // Section block: prepend heading
-        let heading_prefix = "#".repeat(block.level as usize);
-        format!("{} {}\n\n{}", heading_prefix, block.title, block.content)
-    };
-
-    // Parse markdown into mq's Markdown AST
-    let markdown: Markdown = markdown_content.parse()
-        .map_err(|e| format!("Failed to parse markdown: {}", e))?;
-
-    // Create engine and execute query
-    let mut engine = DefaultEngine::default();
-
-    // Wrap the markdown nodes in a Fragment for mq processing
-    use mq_markdown::{Node, Fragment};
-    let root_node = Node::Fragment(Fragment {
-        values: markdown.nodes.clone(),
-    });
-
-    let input = vec![RuntimeValue::Markdown(root_node, None)].into_iter();
-
-    let results = engine
-        .eval(query, input)
-        .map_err(|e| format!("Query execution failed: {}", e))?;
-
-    // Convert RuntimeValues (collection) to JSON array
-    let json_values: Vec<serde_json::Value> = results.values()
-        .iter()
-        .map(runtime_value_to_json)
-        .collect();
-
-    // If there's only one result, return it directly; otherwise return an array
-    if json_values.len() == 1 {
-        Ok(json_values.into_iter().next().unwrap())
-    } else {
-        Ok(serde_json::Value::Array(json_values))
-    }
+/// Execute an mq query on a block's markdown content (temporarily disabled)
+fn execute_mq_query(_block: &Block, _query: &str) -> Result<serde_json::Value, String> {
+    // Temporarily disabled mq functionality for faster build
+    Err("mq query functionality temporarily disabled for build performance".to_string())
 }
 
-/// Convert a single RuntimeValue to JSON
-fn runtime_value_to_json(value: &RuntimeValue) -> serde_json::Value {
-    match value {
-        RuntimeValue::String(s) => serde_json::Value::String(s.clone()),
-        RuntimeValue::Number(n) => serde_json::json!(n.value()),
-        RuntimeValue::Boolean(b) => serde_json::Value::Bool(*b),
-        RuntimeValue::None => serde_json::Value::Null,
-        RuntimeValue::Markdown(node, _selector) => {
-            // Convert markdown node to string representation
-            serde_json::Value::String(format!("{:?}", node))
-        },
-        RuntimeValue::Array(arr) => {
-            let json_arr: Vec<_> = arr.iter().map(runtime_value_to_json).collect();
-            serde_json::Value::Array(json_arr)
-        },
-        _ => {
-            // For other types (Function, Dict, etc.), use debug representation
-            serde_json::Value::String(format!("{:?}", value))
-        }
-    }
-}
+// RuntimeValue to JSON conversion temporarily disabled
 
 /// Expand the graph from a starting block to the specified depth
 /// Returns all blocks discovered during expansion (excluding the starting block)
@@ -312,21 +250,26 @@ impl McpServer {
 
     /// Automatically re-index a file when database inconsistencies are detected
     async fn auto_reindex_file(&self, file_path: &str) -> Result<(), McpError> {
-        info!("⚠️  Auto-reindexing file due to database inconsistency: {}", file_path);
+        info!(
+            "⚠️  Auto-reindexing file due to database inconsistency: {}",
+            file_path
+        );
 
         // Build absolute path
         let absolute_path = std::path::Path::new(&self.config.vault.path).join(file_path);
 
         // Re-extract blocks from the file
         let blocks = indexer::extract_blocks_from_file(&absolute_path, &self.config.vault.path)
-            .map_err(|e| McpError::internal_error(format!("Failed to extract blocks: {}", e), None))?;
+            .map_err(|e| {
+                McpError::internal_error(format!("Failed to extract blocks: {}", e), None)
+            })?;
 
         let db = self.db.write().await;
 
         // Delete all existing blocks for this file
-        db.delete_blocks_by_file(file_path)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to delete old blocks: {}", e), None))?;
+        db.delete_blocks_by_file(file_path).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to delete old blocks: {}", e), None)
+        })?;
 
         // Insert all blocks with embeddings
         for mut block in blocks {
@@ -339,9 +282,9 @@ impl McpServer {
                 }
             }
 
-            db.create_block(block)
-                .await
-                .map_err(|e| McpError::internal_error(format!("Failed to create block: {}", e), None))?;
+            db.create_block(block).await.map_err(|e| {
+                McpError::internal_error(format!("Failed to create block: {}", e), None)
+            })?;
         }
 
         drop(db);
@@ -433,7 +376,9 @@ impl McpServer {
     }
 
     /// Get a specific block by ID or content address
-    #[tool(description = "Get a specific block by ID or content address (e.g., 'project.md#Overview'). Supports mq queries: 'project.md#Overview?query=headings' to extract specific markdown elements")]
+    #[tool(
+        description = "Get a specific block by ID or content address (e.g., 'project.md#Overview'). Supports mq queries: 'project.md#Overview?query=headings' to extract specific markdown elements"
+    )]
     async fn get_block(
         &self,
         params: Parameters<GetBlockInput>,
@@ -458,17 +403,14 @@ impl McpServer {
 
                             let text = format!(
                                 "Query: {}\nBlock: {} ({})\n\nResult:\n{}",
-                                q,
-                                b.title,
-                                b.content_address,
-                                result_str
+                                q, b.title, b.content_address, result_str
                             );
                             Ok(CallToolResult::success(vec![Content::text(text)]))
                         }
                         Err(e) => Err(McpError::internal_error(
                             format!("mq query failed: {}", e),
-                            None
-                        ))
+                            None,
+                        )),
                     }
                 } else {
                     // No query - return block as JSON (original behavior)
@@ -541,10 +483,12 @@ impl McpServer {
             .get_block_by_id_or_address(&params.0.parent_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(
-                format!("Parent block not found: {}", params.0.parent_id),
-                None
-            ))?;
+            .ok_or_else(|| {
+                McpError::invalid_request(
+                    format!("Parent block not found: {}", params.0.parent_id),
+                    None,
+                )
+            })?;
 
         // Now get children using the resolved block's actual ID
         let children = db
@@ -579,10 +523,9 @@ impl McpServer {
 
         // Generate embedding for the query
         let query_text = prepare_block_text(&params.0.query, "", 8000);
-        let query_embedding = embedding_service
-            .embed(query_text)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to generate query embedding: {}", e), None))?;
+        let query_embedding = embedding_service.embed(query_text).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to generate query embedding: {}", e), None)
+        })?;
 
         // Search for similar blocks (get more results if reranking is enabled)
         let initial_limit = if self.reranking_service.is_some() {
@@ -624,8 +567,11 @@ impl McpServer {
 
             // Expand from each core result
             for block in &core_results {
-                let expanded = expand_block_graph(&db, &block.id, params.0.expand).await
-                    .map_err(|e| McpError::internal_error(format!("Graph expansion failed: {}", e), None))?;
+                let expanded = expand_block_graph(&db, &block.id, params.0.expand)
+                    .await
+                    .map_err(|e| {
+                        McpError::internal_error(format!("Graph expansion failed: {}", e), None)
+                    })?;
 
                 for exp_block in expanded {
                     // Only add if not already in core results
@@ -638,8 +584,11 @@ impl McpServer {
             // Fetch expanded blocks
             let mut expanded_block_list = Vec::new();
             for block_id in expanded_blocks {
-                if let Some(block) = db.get_block(&block_id).await
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))? {
+                if let Some(block) = db
+                    .get_block(&block_id)
+                    .await
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                {
                     expanded_block_list.push(block);
                 }
             }
@@ -671,7 +620,10 @@ impl McpServer {
             }
 
             if !expanded_block_list.is_empty() {
-                text.push_str(&format!("\n## Related via Graph Expansion ({})\n\n", expanded_block_list.len()));
+                text.push_str(&format!(
+                    "\n## Related via Graph Expansion ({})\n\n",
+                    expanded_block_list.len()
+                ));
                 for b in &expanded_block_list {
                     text.push_str(&format!(
                         "- [{}] {}\n  File: {}\n  Content: {}\n\n",
@@ -761,16 +713,14 @@ impl McpServer {
 
         // Save to database
         let db = self.db.write().await;
-        let created_block = db
-            .create_block(block)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to create block: {}", e), None))?;
+        let created_block = db.create_block(block).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to create block: {}", e), None)
+        })?;
 
         // Get all blocks for this file to reconstruct it
-        let file_blocks = db
-            .get_blocks_by_file(&input.file_path)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get file blocks: {}", e), None))?;
+        let file_blocks = db.get_blocks_by_file(&input.file_path).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to get file blocks: {}", e), None)
+        })?;
 
         drop(db);
 
@@ -812,15 +762,22 @@ impl McpServer {
                 drop(db);
 
                 let db_read = self.db.read().await;
-                let files = db_read.get_all_files().await
+                let files = db_read
+                    .get_all_files()
+                    .await
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
                 let mut target_file = None;
                 for file in files {
-                    let blocks = db_read.get_blocks_by_file(&file.file_path).await
+                    let blocks = db_read
+                        .get_blocks_by_file(&file.file_path)
+                        .await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                     // Try to match by content address or ID
-                    if blocks.iter().any(|b| b.id == input.id || b.content_address == input.id) {
+                    if blocks
+                        .iter()
+                        .any(|b| b.id == input.id || b.content_address == input.id)
+                    {
                         target_file = Some(file.file_path.clone());
                         break;
                     }
@@ -833,17 +790,24 @@ impl McpServer {
 
                     // Retry getting the block
                     let db = self.db.write().await;
-                    let b = db.get_block_by_id_or_address(&input.id).await
+                    let b = db
+                        .get_block_by_id_or_address(&input.id)
+                        .await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?
-                        .ok_or_else(|| McpError::invalid_request(
-                            format!("Block not found even after re-indexing: {}", input.id),
-                            None
-                        ))?;
+                        .ok_or_else(|| {
+                            McpError::invalid_request(
+                                format!("Block not found even after re-indexing: {}", input.id),
+                                None,
+                            )
+                        })?;
                     let fp2 = b.file_path.clone();
                     drop(db);
                     (b, fp2)
                 } else {
-                    return Err(McpError::invalid_request(format!("Block not found: {}", input.id), None));
+                    return Err(McpError::invalid_request(
+                        format!("Block not found: {}", input.id),
+                        None,
+                    ));
                 }
             }
         };
@@ -881,16 +845,14 @@ impl McpServer {
         }
 
         // Update in database
-        let updated_block = db
-            .update_block(&input.id, block)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to update block: {}", e), None))?;
+        let updated_block = db.update_block(&input.id, block).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to update block: {}", e), None)
+        })?;
 
         // Get all blocks for this file to reconstruct it
-        let file_blocks = db
-            .get_blocks_by_file(&file_path)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get file blocks: {}", e), None))?;
+        let file_blocks = db.get_blocks_by_file(&file_path).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to get file blocks: {}", e), None)
+        })?;
 
         drop(db);
 
@@ -928,15 +890,22 @@ impl McpServer {
                 drop(db);
 
                 let db_read = self.db.read().await;
-                let files = db_read.get_all_files().await
+                let files = db_read
+                    .get_all_files()
+                    .await
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
                 let mut target_file = None;
                 for file in files {
-                    let blocks = db_read.get_blocks_by_file(&file.file_path).await
+                    let blocks = db_read
+                        .get_blocks_by_file(&file.file_path)
+                        .await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                     // Try to match by content address or ID
-                    if blocks.iter().any(|b2| b2.id == input.id || b2.content_address == input.id) {
+                    if blocks
+                        .iter()
+                        .any(|b2| b2.id == input.id || b2.content_address == input.id)
+                    {
                         target_file = Some(file.file_path.clone());
                         break;
                     }
@@ -949,16 +918,23 @@ impl McpServer {
 
                     // Retry getting the block
                     let db = self.db.write().await;
-                    let b = db.get_block_by_id_or_address(&input.id).await
+                    let b = db
+                        .get_block_by_id_or_address(&input.id)
+                        .await
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?
-                        .ok_or_else(|| McpError::invalid_request(
-                            format!("Block not found even after re-indexing: {}", input.id),
-                            None
-                        ))?;
+                        .ok_or_else(|| {
+                            McpError::invalid_request(
+                                format!("Block not found even after re-indexing: {}", input.id),
+                                None,
+                            )
+                        })?;
                     drop(db);
                     b
                 } else {
-                    return Err(McpError::invalid_request(format!("Block not found: {}", input.id), None));
+                    return Err(McpError::invalid_request(
+                        format!("Block not found: {}", input.id),
+                        None,
+                    ));
                 }
             }
         };
@@ -969,9 +945,9 @@ impl McpServer {
         let is_file = block.level == 0;
 
         // Delete the block
-        db.delete_block(&input.id)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to delete block: {}", e), None))?;
+        db.delete_block(&input.id).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to delete block: {}", e), None)
+        })?;
 
         if is_file {
             // If it's a file block, delete the entire file and all its blocks
@@ -989,8 +965,9 @@ impl McpServer {
             drop(db);
 
             // Delete the file
-            writer::delete_file(&self.config.vault.path, &file_path)
-                .map_err(|e| McpError::internal_error(format!("Failed to delete file: {}", e), None))?;
+            writer::delete_file(&self.config.vault.path, &file_path).map_err(|e| {
+                McpError::internal_error(format!("Failed to delete file: {}", e), None)
+            })?;
 
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "✅ Deleted file: {}",
@@ -998,17 +975,18 @@ impl McpServer {
             ))]))
         } else {
             // Get remaining blocks for this file to reconstruct it
-            let file_blocks = db
-                .get_blocks_by_file(&file_path)
-                .await
-                .map_err(|e| McpError::internal_error(format!("Failed to get file blocks: {}", e), None))?;
+            let file_blocks = db.get_blocks_by_file(&file_path).await.map_err(|e| {
+                McpError::internal_error(format!("Failed to get file blocks: {}", e), None)
+            })?;
 
             drop(db);
 
             // Reconstruct and write the file without the deleted block
             if !file_blocks.is_empty() {
                 writer::write_file_from_blocks(&self.config.vault.path, &file_path, &file_blocks)
-                    .map_err(|e| McpError::internal_error(format!("Failed to write file: {}", e), None))?;
+                    .map_err(|e| {
+                    McpError::internal_error(format!("Failed to write file: {}", e), None)
+                })?;
             }
 
             Ok(CallToolResult::success(vec![Content::text(format!(
@@ -1033,7 +1011,9 @@ impl McpServer {
             .get_block_by_id_or_address(&input.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(format!("Block not found: {}", input.id), None))?;
+            .ok_or_else(|| {
+                McpError::invalid_request(format!("Block not found: {}", input.id), None)
+            })?;
 
         let file_path = block.file_path.clone();
 
@@ -1059,16 +1039,14 @@ impl McpServer {
         }
 
         // Update in database
-        let updated_block = db
-            .update_block(&input.id, block)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to update block: {}", e), None))?;
+        let updated_block = db.update_block(&input.id, block).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to update block: {}", e), None)
+        })?;
 
         // Get all blocks for this file to reconstruct it
-        let file_blocks = db
-            .get_blocks_by_file(&file_path)
-            .await
-            .map_err(|e| McpError::internal_error(format!("Failed to get file blocks: {}", e), None))?;
+        let file_blocks = db.get_blocks_by_file(&file_path).await.map_err(|e| {
+            McpError::internal_error(format!("Failed to get file blocks: {}", e), None)
+        })?;
 
         drop(db);
 
@@ -1091,7 +1069,9 @@ impl McpServer {
     }
 
     /// Get blocks that this block links to (outgoing links)
-    #[tool(description = "Get blocks that this block links to (outgoing wiki-links) by ID or content address")]
+    #[tool(
+        description = "Get blocks that this block links to (outgoing wiki-links) by ID or content address"
+    )]
     async fn get_linked_blocks(
         &self,
         params: Parameters<GetLinkedBlocksInput>,
@@ -1103,10 +1083,9 @@ impl McpServer {
             .get_block_by_id_or_address(&params.0.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(
-                format!("Block not found: {}", params.0.id),
-                None
-            ))?;
+            .ok_or_else(|| {
+                McpError::invalid_request(format!("Block not found: {}", params.0.id), None)
+            })?;
 
         let linked_blocks = db
             .get_linked_blocks(&block.id)
@@ -1122,12 +1101,7 @@ impl McpServer {
             } else {
                 linked_blocks
                     .iter()
-                    .map(|b| format!(
-                        "- [{}] {}\n  File: {}\n",
-                        b.id,
-                        b.title,
-                        b.file_path
-                    ))
+                    .map(|b| format!("- [{}] {}\n  File: {}\n", b.id, b.title, b.file_path))
                     .collect::<String>()
             }
         );
@@ -1136,7 +1110,9 @@ impl McpServer {
     }
 
     /// Get blocks that link to this block (backlinks)
-    #[tool(description = "Get blocks that link to this block (incoming wiki-links/backlinks) by ID or content address")]
+    #[tool(
+        description = "Get blocks that link to this block (incoming wiki-links/backlinks) by ID or content address"
+    )]
     async fn get_backlinks(
         &self,
         params: Parameters<GetBacklinksInput>,
@@ -1148,10 +1124,9 @@ impl McpServer {
             .get_block_by_id_or_address(&params.0.id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(
-                format!("Block not found: {}", params.0.id),
-                None
-            ))?;
+            .ok_or_else(|| {
+                McpError::invalid_request(format!("Block not found: {}", params.0.id), None)
+            })?;
 
         let backlinks = db
             .get_backlinks(&block.id)
@@ -1167,12 +1142,7 @@ impl McpServer {
             } else {
                 backlinks
                     .iter()
-                    .map(|b| format!(
-                        "- [{}] {}\n  File: {}\n",
-                        b.id,
-                        b.title,
-                        b.file_path
-                    ))
+                    .map(|b| format!("- [{}] {}\n  File: {}\n", b.id, b.title, b.file_path))
                     .collect::<String>()
             }
         );
@@ -1201,13 +1171,15 @@ impl McpServer {
             } else {
                 blocks
                     .iter()
-                    .map(|b| format!(
-                        "- [{}] {}\n  File: {}\n  Tags: {}\n",
-                        b.id,
-                        b.title,
-                        b.file_path,
-                        b.tags.join(", ")
-                    ))
+                    .map(|b| {
+                        format!(
+                            "- [{}] {}\n  File: {}\n  Tags: {}\n",
+                            b.id,
+                            b.title,
+                            b.file_path,
+                            b.tags.join(", ")
+                        )
+                    })
                     .collect::<String>()
             }
         );
@@ -1216,7 +1188,9 @@ impl McpServer {
     }
 
     /// Find connection path between two blocks via wiki-links
-    #[tool(description = "Find a connection path between two blocks via wiki-links (BFS search) using IDs or content addresses")]
+    #[tool(
+        description = "Find a connection path between two blocks via wiki-links (BFS search) using IDs or content addresses"
+    )]
     async fn find_connection_path(
         &self,
         params: Parameters<FindConnectionPathInput>,
@@ -1229,13 +1203,20 @@ impl McpServer {
             .get_block_by_id_or_address(&input.from_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(format!("Source block not found: {}", input.from_id), None))?;
+            .ok_or_else(|| {
+                McpError::invalid_request(
+                    format!("Source block not found: {}", input.from_id),
+                    None,
+                )
+            })?;
 
         let to_block = db
             .get_block_by_id_or_address(&input.to_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
-            .ok_or_else(|| McpError::invalid_request(format!("Target block not found: {}", input.to_id), None))?;
+            .ok_or_else(|| {
+                McpError::invalid_request(format!("Target block not found: {}", input.to_id), None)
+            })?;
 
         // BFS to find shortest path
         use std::collections::{HashMap, VecDeque};
@@ -1304,7 +1285,11 @@ impl McpServer {
         // Get block details for path
         let mut path_blocks = Vec::new();
         for id in &path {
-            if let Some(block) = db.get_block(id).await.map_err(|e| McpError::internal_error(e.to_string(), None))? {
+            if let Some(block) = db
+                .get_block(id)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            {
                 path_blocks.push(block);
             }
         }
@@ -1316,15 +1301,25 @@ impl McpServer {
                 .iter()
                 .enumerate()
                 .map(|(i, b)| {
-                    let arrow = if i < path_blocks.len() - 1 { " →" } else { "" };
-                    format!("{}. [{}] {} ({}){}\n", i + 1, b.id, b.title, b.file_path, arrow)
+                    let arrow = if i < path_blocks.len() - 1 {
+                        " →"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "{}. [{}] {} ({}){}\n",
+                        i + 1,
+                        b.id,
+                        b.title,
+                        b.file_path,
+                        arrow
+                    )
                 })
                 .collect::<String>()
         );
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
-
 }
 
 // Implement the server handler

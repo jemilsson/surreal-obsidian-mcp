@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gray_matter::Matter;
 use gray_matter::engine::YAML;
+use gray_matter::Matter;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 use regex::Regex;
 use serde_json::Value;
@@ -41,8 +41,10 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
 
     let frontmatter = if let Some(data) = parsed.data {
         // Convert gray_matter's Value to serde_json::Value
-        serde_json::from_str(&serde_json::to_string(&data.deserialize::<serde_json::Value>()?)?)
-            .context("Failed to convert frontmatter to JSON")?
+        serde_json::from_str(&serde_json::to_string(
+            &data.deserialize::<serde_json::Value>()?,
+        )?)
+        .context("Failed to convert frontmatter to JSON")?
     } else {
         HashMap::new()
     };

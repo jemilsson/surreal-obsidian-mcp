@@ -21,9 +21,7 @@ pub trait RerankingService: Send + Sync {
 }
 
 /// Create a reranking service from configuration
-pub fn create_reranking_service(
-    config: &RerankingConfig,
-) -> Result<Arc<dyn RerankingService>> {
+pub fn create_reranking_service(config: &RerankingConfig) -> Result<Arc<dyn RerankingService>> {
     if !config.enabled {
         anyhow::bail!("Reranking is not enabled in configuration");
     }
@@ -35,9 +33,7 @@ pub fn create_reranking_service(
 
     match provider {
         #[cfg(feature = "embedded")]
-        crate::config::RerankingProvider::Embedded => {
-            Ok(Arc::new(CandleReranker::new(config)?))
-        }
+        crate::config::RerankingProvider::Embedded => Ok(Arc::new(CandleReranker::new(config)?)),
         crate::config::RerankingProvider::Cohere => {
             anyhow::bail!("Cohere reranker not yet implemented")
         }
@@ -58,8 +54,8 @@ mod candle_reranker {
     use candle_transformers::models::bert::{BertModel, Config as BertConfig};
     use hf_hub::{api::sync::Api, Repo, RepoType};
     use std::path::PathBuf;
-    use tracing::{debug, info};
     use tokenizers::Tokenizer;
+    use tracing::{debug, info};
 
     /// Candle-based reranker using cross-encoder models
     pub struct CandleReranker {
@@ -82,7 +78,8 @@ mod candle_reranker {
             let device = Device::Cpu;
 
             // Download model from HuggingFace
-            let (model_path, tokenizer_path) = Self::download_model(model_name, &config.model_cache)?;
+            let (model_path, tokenizer_path) =
+                Self::download_model(model_name, &config.model_cache)?;
 
             // Load tokenizer
             let tokenizer = Tokenizer::from_file(&tokenizer_path)
@@ -90,14 +87,18 @@ mod candle_reranker {
 
             // Load model config and weights
             let vb = unsafe {
-                VarBuilder::from_mmaped_safetensors(&[model_path.join("model.safetensors")], DType::F32, &device)?
+                VarBuilder::from_mmaped_safetensors(
+                    &[model_path.join("model.safetensors")],
+                    DType::F32,
+                    &device,
+                )?
             };
 
             let config_path = model_path.join("config.json");
-            let config_str = std::fs::read_to_string(&config_path)
-                .context("Failed to read model config")?;
-            let bert_config: BertConfig = serde_json::from_str(&config_str)
-                .context("Failed to parse model config")?;
+            let config_str =
+                std::fs::read_to_string(&config_path).context("Failed to read model config")?;
+            let bert_config: BertConfig =
+                serde_json::from_str(&config_str).context("Failed to parse model config")?;
 
             let model = BertModel::load(vb, &bert_config)?;
 
@@ -126,17 +127,20 @@ mod candle_reranker {
             info!("Downloading model files from HuggingFace...");
 
             // Download required files
-            let model_dir = repo.get("model.safetensors")
+            let model_dir = repo
+                .get("model.safetensors")
                 .context("Failed to download model weights")?
                 .parent()
                 .context("Invalid model path")?
                 .to_path_buf();
 
-            let tokenizer_path = repo.get("tokenizer.json")
+            let tokenizer_path = repo
+                .get("tokenizer.json")
                 .context("Failed to download tokenizer")?;
 
             // Also download config
-            let _config = repo.get("config.json")
+            let _config = repo
+                .get("config.json")
                 .context("Failed to download config")?;
 
             Ok((model_dir, tokenizer_path))
@@ -153,8 +157,7 @@ mod candle_reranker {
                 .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
             let tokens = encoding.get_ids();
-            let token_ids = Tensor::new(tokens, &self.device)?
-                .unsqueeze(0)?; // Add batch dimension
+            let token_ids = Tensor::new(tokens, &self.device)?.unsqueeze(0)?; // Add batch dimension
 
             // Create attention mask
             let attention_mask = Tensor::ones((1, tokens.len()), DType::U8, &self.device)?;
@@ -207,7 +210,11 @@ mod candle_reranker {
             }
 
             // Sort by score (descending)
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
             // Take top N
             results.truncate(self.top_n);
@@ -231,7 +238,12 @@ mod tests {
         // Just a basic struct test
         use crate::db::Block;
 
-        let block = Block::new(0, "Test".to_string(), "Content".to_string(), "test.md".to_string());
+        let block = Block::new(
+            0,
+            "Test".to_string(),
+            "Content".to_string(),
+            "test.md".to_string(),
+        );
         let result = RankedResult {
             block: block.clone(),
             score: 0.95,

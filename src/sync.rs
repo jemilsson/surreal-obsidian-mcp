@@ -73,7 +73,10 @@ impl Synchronizer {
                     debug!("✅ Generated {} embeddings", blocks.len());
                 }
                 Err(e) => {
-                    warn!("Failed to generate embeddings: {}. Continuing without embeddings.", e);
+                    warn!(
+                        "Failed to generate embeddings: {}. Continuing without embeddings.",
+                        e
+                    );
                 }
             }
         }
@@ -114,7 +117,11 @@ impl Synchronizer {
                         batch_blocks.extend(blocks);
                     }
                     Err(e) => {
-                        error!("Failed to extract blocks from {}: {}", file_path.display(), e);
+                        error!(
+                            "Failed to extract blocks from {}: {}",
+                            file_path.display(),
+                            e
+                        );
                         error_count += 1;
                     }
                 }
@@ -229,7 +236,11 @@ impl Synchronizer {
 
         // Generate embeddings for the blocks
         if let Err(e) = self.generate_embeddings(&mut blocks).await {
-            warn!("Failed to generate embeddings for {}: {}", file_path.display(), e);
+            warn!(
+                "Failed to generate embeddings for {}: {}",
+                file_path.display(),
+                e
+            );
         }
 
         // Get relative path for database lookup

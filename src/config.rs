@@ -207,14 +207,22 @@ impl Config {
         }
 
         if !self.vault.path.is_dir() {
-            anyhow::bail!("Vault path is not a directory: {}", self.vault.path.display());
+            anyhow::bail!(
+                "Vault path is not a directory: {}",
+                self.vault.path.display()
+            );
         }
 
         // Validate embedding config
         match self.embedding.provider {
-            EmbeddingProvider::OpenAi | EmbeddingProvider::OpenAiCompatible | EmbeddingProvider::Ollama => {
+            EmbeddingProvider::OpenAi
+            | EmbeddingProvider::OpenAiCompatible
+            | EmbeddingProvider::Ollama => {
                 if self.embedding.api_base.is_none() {
-                    anyhow::bail!("api_base is required for {:?} provider", self.embedding.provider);
+                    anyhow::bail!(
+                        "api_base is required for {:?} provider",
+                        self.embedding.provider
+                    );
                 }
             }
         }

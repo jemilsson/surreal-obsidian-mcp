@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use notify::{Event, EventKind, RecursiveMode, RecommendedWatcher, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -32,19 +32,17 @@ impl VaultWatcher {
         let mut debouncer = new_debouncer(
             Duration::from_secs(2),
             None,
-            move |result: DebounceEventResult| {
-                match result {
-                    Ok(events) => {
-                        for event in events {
-                            if let Err(e) = Self::handle_event(&tx_clone, event.event) {
-                                error!("Error handling file event: {}", e);
-                            }
+            move |result: DebounceEventResult| match result {
+                Ok(events) => {
+                    for event in events {
+                        if let Err(e) = Self::handle_event(&tx_clone, event.event) {
+                            error!("Error handling file event: {}", e);
                         }
                     }
-                    Err(errors) => {
-                        for error in errors {
-                            error!("File watcher error: {}", error);
-                        }
+                }
+                Err(errors) => {
+                    for error in errors {
+                        error!("File watcher error: {}", error);
                     }
                 }
             },
@@ -66,10 +64,7 @@ impl VaultWatcher {
     }
 
     /// Handle a file system event
-    fn handle_event(
-        tx: &mpsc::UnboundedSender<FileEvent>,
-        event: Event,
-    ) -> Result<()> {
+    fn handle_event(tx: &mpsc::UnboundedSender<FileEvent>, event: Event) -> Result<()> {
         // Only process markdown files
         let paths: Vec<PathBuf> = event
             .paths
