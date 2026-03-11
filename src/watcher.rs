@@ -133,11 +133,14 @@ pub fn scan_vault<P: AsRef<Path>>(vault_path: P) -> Result<Vec<PathBuf>> {
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
-            // Prune hidden directories (e.g. .trash, .obsidian) from traversal entirely
-            !e.file_name()
-                .to_str()
-                .map(|n| n.starts_with('.'))
-                .unwrap_or(false)
+            // Always include the vault root itself (depth 0), then prune hidden
+            // directories/files (e.g. .trash, .obsidian) from traversal entirely
+            e.depth() == 0
+                || !e
+                    .file_name()
+                    .to_str()
+                    .map(|n| n.starts_with('.'))
+                    .unwrap_or(false)
         })
         .filter_map(|e| e.ok())
     {
