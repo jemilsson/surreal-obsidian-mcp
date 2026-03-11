@@ -389,7 +389,9 @@ impl McpServer {
 #[tool_router]
 impl McpServer {
     /// Search blocks by content (title or body text)
-    #[tool(description = "Search blocks by content (title or body text)")]
+    #[tool(
+        description = "Search for notes and knowledge by keyword or phrase. ALWAYS search the vault before answering questions — relevant notes may already exist. Returns matching blocks with titles, file paths, and content previews. Use this as your primary knowledge lookup tool."
+    )]
     async fn search_blocks(
         &self,
         params: Parameters<SearchBlocksInput>,
@@ -427,7 +429,7 @@ impl McpServer {
 
     /// Get a specific block by ID or content address
     #[tool(
-        description = "Get a specific block by ID or content address (e.g., 'project.md#Overview'). Supports mq queries: 'project.md#Overview?query=headings' to extract specific markdown elements"
+        description = "Read the full content of a specific note or section by file path (e.g., 'project.md') or heading address (e.g., 'project.md#Overview'). Use after search_blocks to read a full result, or when you know exactly which note to fetch. Supports mq queries: 'project.md#Overview?query=headings' to extract structured elements."
     )]
     async fn get_block(
         &self,
@@ -477,7 +479,9 @@ impl McpServer {
     }
 
     /// Get all blocks for a specific file path (relative to vault root)
-    #[tool(description = "Get all blocks for a specific file path (relative to vault root)")]
+    #[tool(
+        description = "Get all sections and headings within a specific file. Use to read a file's complete structure when you know the filename."
+    )]
     async fn get_blocks_by_file(
         &self,
         params: Parameters<GetBlocksByFileInput>,
@@ -500,7 +504,9 @@ impl McpServer {
     }
 
     /// Get all file blocks (level 0) in the vault
-    #[tool(description = "Get all file blocks (level 0) in the vault")]
+    #[tool(
+        description = "List all files in the vault. Use only to browse available files when you have no specific topic — for finding content, use search_blocks instead."
+    )]
     async fn get_all_files(&self) -> Result<CallToolResult, McpError> {
         let db = self.db.read().await;
         let files = db
@@ -521,7 +527,9 @@ impl McpServer {
     }
 
     /// Get child blocks of a specific block
-    #[tool(description = "Get child blocks of a specific block by ID or content address")]
+    #[tool(
+        description = "Get subsections and child blocks of a specific block. Use to navigate deeper into a document's hierarchy after retrieving a parent block."
+    )]
     async fn get_children(
         &self,
         params: Parameters<GetChildrenInput>,
@@ -558,7 +566,9 @@ impl McpServer {
     }
 
     /// Search for semantically similar blocks using vector embeddings
-    #[tool(description = "Search for semantically similar blocks using vector embeddings")]
+    #[tool(
+        description = "Find conceptually related notes using semantic similarity (requires embeddings to be configured). Use when searching by meaning or concept rather than exact keywords — complements search_blocks for broader knowledge discovery."
+    )]
     async fn search_similar(
         &self,
         params: Parameters<SearchSimilarInput>,
@@ -721,7 +731,9 @@ impl McpServer {
     }
 
     /// Create a new block (file or heading)
-    #[tool(description = "Create a new block (file or heading) in the vault")]
+    #[tool(
+        description = "Create a new note file or add a heading section to an existing file. Use to save new information, summaries, or discoveries so they persist in the vault for future reference."
+    )]
     async fn create_block(
         &self,
         params: Parameters<CreateBlockInput>,
@@ -790,7 +802,9 @@ impl McpServer {
     }
 
     /// Update an existing block's content or title
-    #[tool(description = "Update an existing block's content or title by ID or content address")]
+    #[tool(
+        description = "Replace the content of a specific note or section. Use to correct or update existing information. If you want to add without overwriting, use append_to_block instead."
+    )]
     async fn update_block(
         &self,
         params: Parameters<UpdateBlockInput>,
@@ -921,7 +935,9 @@ impl McpServer {
     }
 
     /// Delete a block
-    #[tool(description = "Delete a block from the vault by ID or content address")]
+    #[tool(
+        description = "Permanently delete a note file or heading section from the vault. Use with caution — this cannot be undone."
+    )]
     async fn delete_block(
         &self,
         params: Parameters<DeleteBlockInput>,
@@ -1047,7 +1063,9 @@ impl McpServer {
     }
 
     /// Append content to an existing block
-    #[tool(description = "Append content to an existing block by ID or content address")]
+    #[tool(
+        description = "Add content to the end of a note or section without overwriting it. Use to record new information, log discoveries, or update notes with new findings. Prefer this over update_block when adding to existing content."
+    )]
     async fn append_to_block(
         &self,
         params: Parameters<AppendToBlockInput>,
@@ -1201,7 +1219,9 @@ impl McpServer {
     }
 
     /// Find blocks by tag
-    #[tool(description = "Find all blocks with a specific tag")]
+    #[tool(
+        description = "Find all notes and sections tagged with a specific Obsidian tag (e.g., 'project' matches #project). Use when notes are organized by tags rather than content keywords."
+    )]
     async fn find_by_tag(
         &self,
         params: Parameters<FindByTagInput>,
