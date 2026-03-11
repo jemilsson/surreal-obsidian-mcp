@@ -2,14 +2,16 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+#[cfg(feature = "persistent")]
 use surrealdb::engine::local::{Db, SurrealKv};
-use surrealdb::Surreal;
-use surrealdb_types::{RecordId, SurrealValue};
+#[cfg(not(feature = "persistent"))]
+use surrealdb::engine::local::{Db, Mem};
+use surrealdb::{Surreal, RecordId};
 use tracing::info;
 use uuid::Uuid;
 
 /// Internal database record with RecordId for SurrealDB 3.0 compatibility
-#[derive(Debug, Clone, Serialize, Deserialize, SurrealValue)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BlockRecord {
     id: RecordId,
     level: u8,
@@ -44,7 +46,7 @@ impl BlockRecord {
     fn to_block(self) -> Block {
         // The RecordId.key can be a String, Number, or other types
         // We need to extract just the value without the Debug wrapper
-        let key_string = format!("{:?}", self.id.key);
+        let key_string = format!("{:?}", self.id.key());
         // Remove "String(" prefix and ")" suffix if present, then trim quotes
         let id = if key_string.starts_with("String(\"") && key_string.ends_with("\")") {
             key_string[8..key_string.len() - 2].to_string()
@@ -125,7 +127,13 @@ impl Database {
     pub async fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         info!("Initializing SurrealDB at {}", path.as_ref().display());
 
+        #[cfg(feature = "persistent")]
         let db = Surreal::new::<SurrealKv>(path.as_ref())
+            .await
+            .context("Failed to create SurrealDB instance")?;
+        
+        #[cfg(not(feature = "persistent"))]
+        let db = Surreal::new::<Mem>(())
             .await
             .context("Failed to create SurrealDB instance")?;
 

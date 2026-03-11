@@ -31,9 +31,8 @@ tokio = { version = "1.40", features = ["full"] }
 tokio-util = "0.7"
 async-trait = "0.1"
 
-# Database (pure Rust - only SurrealKV for persistent storage, no auth/jwt)
-surrealdb = { version = "3.0", features = ["kv-surrealkv"], default-features = false }
-surrealdb-types = "3.0"
+# Database (minimal features for fast builds - using 2.x for performance)
+surrealdb = { version = "2.1", features = ["kv-mem"], default-features = false }
 
 # Configuration
 serde = { version = "1.0", features = ["derive"] }
@@ -87,6 +86,7 @@ tempfile = "3.14"
 [features]
 default = []
 embedded = ["candle-core", "candle-nn", "candle-transformers", "hf-hub", "tokenizers"]
+persistent = ["surrealdb/kv-surrealkv"]
 
 [profile.release]
 opt-level = 3
