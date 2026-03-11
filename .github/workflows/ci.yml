@@ -34,7 +34,18 @@ jobs:
       - name: Run tests
         run: cargo test --all-features --verbose
 
-  # Build and publish nightly binary - runs on every push to master
+      - name: Build release binary
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        run: cargo build --release --all-features
+
+      - name: Upload binary artifact
+        if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: surreal-obsidian-mcp-linux-x86_64
+          path: target/release/surreal-obsidian-mcp
+
+  # Publish nightly release from artifact - no rebuild needed
   release-nightly:
     name: Nightly Release
     runs-on: ubuntu-latest
@@ -44,20 +55,13 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binary
-        run: cargo build --release --all-features
+      - name: Download binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: surreal-obsidian-mcp-linux-x86_64
 
       - name: Rename binary
-        run: cp target/release/surreal-obsidian-mcp surreal-obsidian-mcp-linux-x86_64
+        run: mv surreal-obsidian-mcp surreal-obsidian-mcp-linux-x86_64 && chmod +x surreal-obsidian-mcp-linux-x86_64
 
       - name: Publish nightly release
         uses: softprops/action-gh-release@v2
