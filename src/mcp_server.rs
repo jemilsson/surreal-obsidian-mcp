@@ -350,14 +350,10 @@ impl McpServer {
     /// Create a new MCP server
     pub fn new(db: Arc<RwLock<Database>>, config: Arc<Config>) -> Self {
         // Initialize embedding service if configured
-        let embedding_service = create_embedding_service(&config.embedding)
-            .ok()
-            .map(Arc::from);
+        let embedding_service = create_embedding_service(&config.embedding).ok();
 
         // Initialize reranking service if configured
-        let reranking_service = create_reranking_service(&config.reranking)
-            .ok()
-            .map(Arc::from);
+        let reranking_service = create_reranking_service(&config.reranking).ok();
 
         if reranking_service.is_some() {
             info!("✅ Reranking service initialized");

@@ -198,7 +198,7 @@ fn build_children_relationships(blocks: &mut [Block]) {
         if let Some(parent_id) = &block.parent_id {
             parent_children
                 .entry(parent_id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(block.id.clone());
         }
     }

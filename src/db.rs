@@ -43,7 +43,7 @@ struct BlockRecord {
 
 impl BlockRecord {
     /// Convert BlockRecord to Block by extracting the ID string
-    fn to_block(self) -> Block {
+    fn to_block(&self) -> Block {
         // The RecordId.key can be a String, Number, or other types
         // We need to extract just the value without the Debug wrapper
         let key_string = format!("{:?}", self.id.key());
@@ -57,21 +57,21 @@ impl BlockRecord {
         Block {
             id,
             level: self.level,
-            title: self.title,
-            content: self.content,
-            file_path: self.file_path,
-            content_address: self.content_address,
-            parent_id: self.parent_id,
-            children_ids: self.children_ids,
-            properties: self.properties,
-            tags: self.tags,
+            title: self.title.clone(),
+            content: self.content.clone(),
+            file_path: self.file_path.clone(),
+            content_address: self.content_address.clone(),
+            parent_id: self.parent_id.clone(),
+            children_ids: self.children_ids.clone(),
+            properties: self.properties.clone(),
+            tags: self.tags.clone(),
             position: self.position,
             created_at: self.created_at,
             updated_at: self.updated_at,
-            embedding: self.embedding,
-            content_hash: self.content_hash,
-            outgoing_links: self.outgoing_links,
-            incoming_links: self.incoming_links,
+            embedding: self.embedding.clone(),
+            content_hash: self.content_hash.clone(),
+            outgoing_links: self.outgoing_links.clone(),
+            incoming_links: self.incoming_links.clone(),
         }
     }
 

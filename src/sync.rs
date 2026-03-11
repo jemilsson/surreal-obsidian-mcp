@@ -29,9 +29,7 @@ impl Synchronizer {
         };
 
         // Initialize embedding service if configured
-        let embedding_service = create_embedding_service(&config.embedding)
-            .ok()
-            .map(Arc::from);
+        let embedding_service = create_embedding_service(&config.embedding).ok();
 
         if embedding_service.is_some() {
             info!("✅ Embedding service initialized");
@@ -203,7 +201,7 @@ impl Synchronizer {
                 if let Some(target_block_id) = file_to_block.get(&target_file) {
                     backlinks
                         .entry(target_block_id.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(block.id.clone());
                 }
             }
