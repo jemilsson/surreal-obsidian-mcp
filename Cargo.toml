@@ -31,8 +31,8 @@ tokio = { version = "1.40", features = ["full"] }
 tokio-util = "0.7"
 async-trait = "0.1"
 
-# Database (pure Rust - using in-memory and SurrealKV)
-surrealdb = { version = "3.0", features = ["kv-mem", "kv-surrealkv"] }
+# Database (pure Rust - only SurrealKV for persistent storage, no auth/jwt)
+surrealdb = { version = "3.0", features = ["kv-surrealkv"], default-features = false }
 surrealdb-types = "3.0"
 
 # Configuration
