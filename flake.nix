@@ -12,6 +12,41 @@
 
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     let
+      # Helper to fetch pre-built binary from GitHub releases
+      # Usage: fetchReleaseBinary { version = "v0.1.0"; system = "x86_64-linux"; }
+      fetchReleaseBinary = { pkgs, version, system }:
+        let
+          # Map Nix system to release asset name
+          assetName = {
+            "x86_64-linux" = "surreal-obsidian-mcp-linux-x86_64";
+            "aarch64-linux" = "surreal-obsidian-mcp-linux-aarch64";
+            "x86_64-darwin" = "surreal-obsidian-mcp-macos-x86_64";
+            "aarch64-darwin" = "surreal-obsidian-mcp-macos-arm64";
+          }.${system} or (throw "Unsupported system: ${system}");
+
+          # TODO: Update with actual SHA256 hashes for each release
+          # Get hash with: nix-prefetch-url --unpack <url>
+          sha256 = ""; # Replace with actual hash
+        in
+        pkgs.stdenv.mkDerivation {
+          pname = "surreal-obsidian-mcp";
+          inherit version;
+
+          src = pkgs.fetchurl {
+            url = "https://github.com/jemilsson/surreal-obsidian-mcp/releases/download/${version}/${assetName}";
+            inherit sha256;
+          };
+
+          dontUnpack = true;
+          dontBuild = true;
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp $src $out/bin/surreal-obsidian-mcp
+            chmod +x $out/bin/surreal-obsidian-mcp
+          '';
+        };
+
       # NixOS module for the service
       nixosModule = { config, lib, pkgs, ... }:
         with lib;
@@ -64,7 +99,31 @@
             package = mkOption {
               type = types.package;
               default = self.packages.${pkgs.system}.default;
-              description = "The surreal-obsidian-mcp package to use";
+              description = ''
+                The surreal-obsidian-mcp package to use.
+
+                Default: Build from source (reproducible, slower first build)
+
+                For faster deployments, use pre-built binaries from releases:
+                ```nix
+                # Note: Replace v0.1.0 with actual release version
+                # Get SHA256 with: nix-prefetch-url <release-url>
+                package = pkgs.stdenv.mkDerivation {
+                  pname = "surreal-obsidian-mcp";
+                  version = "v0.1.0";
+                  src = pkgs.fetchurl {
+                    url = "https://github.com/jemilsson/surreal-obsidian-mcp/releases/download/v0.1.0/surreal-obsidian-mcp-linux-x86_64";
+                    sha256 = "0000000000000000000000000000000000000000000000000000";
+                  };
+                  dontUnpack = true;
+                  installPhase = '''
+                    mkdir -p $out/bin
+                    cp $src $out/bin/surreal-obsidian-mcp
+                    chmod +x $out/bin/surreal-obsidian-mcp
+                  ''';
+                };
+                ```
+              '';
             };
 
             vaultPath = mkOption {
@@ -290,6 +349,16 @@
     {
       # Export the NixOS module
       nixosModules.default = nixosModule;
+
+      # Export helper for using pre-built binaries (optional, faster than building)
+      # Usage in your NixOS config:
+      #   services.surreal-obsidian-mcp.package =
+      #     inputs.surreal-obsidian-mcp.lib.fetchReleaseBinary {
+      #       inherit pkgs;
+      #       version = "v0.1.0";
+      #       system = "x86_64-linux";
+      #     };
+      lib.fetchReleaseBinary = fetchReleaseBinary;
     } // flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
