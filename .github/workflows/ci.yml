@@ -62,4 +62,8 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Run security audit
-        run: cargo audit
+        run: |
+          # Temporarily allow RSA vulnerability until SurrealDB fixes it
+          # RUSTSEC-2023-0071: Marvin Attack in rsa crate (medium severity)
+          # No fix available as it's in surrealdb-core -> jsonwebtoken -> rsa dependency chain
+          cargo audit --ignore RUSTSEC-2023-0071

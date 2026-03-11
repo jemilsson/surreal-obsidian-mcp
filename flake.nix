@@ -308,6 +308,7 @@
             cargo-watch
             cargo-edit
             cargo-outdated
+            cargo-audit
 
             # Build essentials (needed for Rust linker and build scripts)
             gcc
