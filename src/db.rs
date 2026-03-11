@@ -194,11 +194,14 @@ impl Database {
             obj.retain(|_, v| !v.is_null());
         }
 
-        // Use insert method for SurrealDB 3.0 - ignore the response to avoid RecordId deserialization
-        let _: Option<serde_json::Value> = self
+        // Insert the block using create() for SurrealDB 2.6 compatibility
+        // We immediately fetch it back with get_block(), so we don't need the result here
+        self
             .db
-            .insert(("blocks", block_id.as_str()))
-            .content(block_json)
+            .query("CREATE type::thing($table, $id) CONTENT $content")
+            .bind(("table", "blocks"))
+            .bind(("id", block_id.clone()))
+            .bind(("content", block_json))
             .await
             .map_err(|e| anyhow::anyhow!("Failed to insert block with ID {}: {:?}", block_id, e))?;
 
@@ -257,11 +260,13 @@ impl Database {
             obj.retain(|_, v| !v.is_null());
         }
 
-        // Update without deserializing response to avoid RecordId issues
-        let _: Option<serde_json::Value> = self
+        // Update using query for SurrealDB 2.6 compatibility
+        self
             .db
-            .update(("blocks", id))
-            .content(block_json)
+            .query("UPDATE type::thing($table, $id) CONTENT $content")
+            .bind(("table", "blocks"))
+            .bind(("id", id.to_string()))
+            .bind(("content", block_json))
             .await
             .context("Failed to update block")?;
 
@@ -273,9 +278,11 @@ impl Database {
 
     /// Delete a block
     pub async fn delete_block(&self, id: &str) -> Result<()> {
-        let _: Option<serde_json::Value> = self
+        self
             .db
-            .delete(("blocks", id))
+            .query("DELETE type::thing($table, $id)")
+            .bind(("table", "blocks"))
+            .bind(("id", id.to_string()))
             .await
             .context("Failed to delete block")?;
 
@@ -554,6 +561,9 @@ mod tests {
         let db_path = dir.path().join("test.db");
 
         let _db = Database::new(&db_path).await.unwrap();
+        // With kv-mem backend (default), no file is created
+        // Only check file existence with persistent feature
+        #[cfg(feature = "persistent")]
         assert!(db_path.exists());
     }
 

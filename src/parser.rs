@@ -93,56 +93,81 @@ pub fn extract_tags(content: &str) -> Vec<String> {
 
 /// Parse markdown headings and their content using mq-lang
 fn parse_headings(content: &str) -> Result<Vec<ParsedHeading>> {
-    // Use mq_lang to parse and query for headings directly
+    // Use mq_lang to parse markdown and query for all nodes
     let runtime_values = mq_lang::parse_markdown_input(content)
         .map_err(|e| anyhow::anyhow!("Failed to parse markdown with mq-lang: {}", e))?;
 
     let mut engine = mq_lang::DefaultEngine::default();
-    let input_iter = runtime_values.into_iter();
-    
-    // Use mq query to extract headings
-    let heading_results = engine
-        .eval("headings", input_iter)
-        .map_err(|e| anyhow::anyhow!("Failed to query headings: {}", e))?;
+    let input = runtime_values.into_iter();
 
-    let mut headings = Vec::new();
-    
-    // Process the heading results
-    for value in heading_results.values() {
+    // Use mq query to get all nodes, then filter for headings in Rust
+    let all_nodes = engine
+        .eval("nodes", input)
+        .map_err(|e| anyhow::anyhow!("Failed to query nodes: {}", e))?;
+
+    let mut heading_matches: Vec<(usize, u8, String, usize)> = Vec::new();
+
+    // Process all nodes and filter for heading nodes
+    for value in all_nodes.values() {
         if let mq_lang::RuntimeValue::Markdown(node, _) = value {
-            // We can use mq queries to extract the information we need
-            // For now, let's use a simplified approach and just extract what we can
-            let (level, title) = extract_heading_info(&node);
+            let (level, title) = extract_heading_info(node);
             if level > 0 {
-                headings.push(ParsedHeading {
-                    level,
-                    title,
-                    content: String::new(), // We'll fill this in later if needed
-                    start_offset: 0, // Simplified for now  
-                    end_offset: 0, // Simplified for now
-                });
+                // Find this heading in the content to get its position
+                // We need positions to extract content between headings
+                if let Some((start, end)) = find_heading_position(content, level, &title) {
+                    heading_matches.push((start, level, title, end));
+                }
             }
         }
+    }
+
+    // Sort by position in document
+    heading_matches.sort_by_key(|m| m.0);
+
+    let mut headings = Vec::new();
+
+    // Extract content for each heading (content between this heading and the next)
+    for i in 0..heading_matches.len() {
+        let (start, level, title, heading_end) = &heading_matches[i];
+
+        // Content starts after the heading line
+        let content_start = *heading_end;
+
+        // Content ends at the start of the next heading (or end of document)
+        let content_end = if i + 1 < heading_matches.len() {
+            heading_matches[i + 1].0
+        } else {
+            content.len()
+        };
+
+        let heading_content = content[content_start..content_end].trim().to_string();
+
+        headings.push(ParsedHeading {
+            level: *level,
+            title: title.clone(),
+            content: heading_content,
+            start_offset: *start,
+            end_offset: content_end,
+        });
     }
 
     Ok(headings)
 }
 
-/// Extract heading information using pattern matching without exposing Node internals
+/// Extract heading level and title from an mq-lang markdown node
 fn extract_heading_info(node: &impl std::fmt::Debug) -> (u8, String) {
-    // For now, we'll use a debug string approach as a proof of concept
+    // Use debug string to extract heading info
+    // This is necessary because mq-lang doesn't expose the node structure directly
     let debug_str = format!("{:?}", node);
-    
-    // Parse the debug output to extract heading info - this is a temporary solution
+
+    // Look for heading patterns in the debug output
+    // Format is typically: Heading { depth: N, ... children: [Text { value: "Title" }] }
     if debug_str.contains("Heading") {
-        // Try to extract level and text from the debug representation
-        // This is hacky but demonstrates the concept
-        if let Some(level) = extract_level_from_debug(&debug_str) {
-            let title = extract_title_from_debug(&debug_str);
-            return (level, title);
-        }
+        let level = extract_level_from_debug(&debug_str).unwrap_or(0);
+        let title = extract_title_from_debug(&debug_str);
+        return (level, title);
     }
-    
+
     (0, String::new())
 }
 
@@ -159,17 +184,33 @@ fn extract_level_from_debug(debug_str: &str) -> Option<u8> {
 }
 
 fn extract_title_from_debug(debug_str: &str) -> String {
-    // This is a very rough approach - ideally we'd use proper mq queries
-    if debug_str.contains("Text") && debug_str.contains("value:") {
-        // Try to extract text content
-        if let Some(start) = debug_str.find("value: \"") {
-            let rest = &debug_str[start + 8..];
-            if let Some(end) = rest.find('"') {
-                return rest[..end].to_string();
-            }
+    // Extract text content from heading children
+    // Look for Text { value: "..." } patterns
+    if let Some(start) = debug_str.find("value: \"") {
+        let rest = &debug_str[start + 8..];
+        if let Some(end) = rest.find('"') {
+            return rest[..end].to_string();
         }
     }
     "Unknown Heading".to_string()
+}
+
+/// Find the position of a heading in the content
+fn find_heading_position(content: &str, level: u8, title: &str) -> Option<(usize, usize)> {
+    let heading_prefix = "#".repeat(level as usize);
+    let heading_line = format!("{} {}", heading_prefix, title);
+
+    // Find the heading in the content
+    if let Some(start) = content.find(&heading_line) {
+        // Find the end of the line
+        let end = content[start..]
+            .find('\n')
+            .map(|offset| start + offset)
+            .unwrap_or(content.len());
+        return Some((start, end));
+    }
+
+    None
 }
 
 

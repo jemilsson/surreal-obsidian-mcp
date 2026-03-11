@@ -344,9 +344,6 @@
             lockFile = ./Cargo.lock;
           };
 
-          # Skip tests during Nix build due to SurrealDB serialization issues in sandbox
-          doCheck = false;
-
           meta = with pkgs.lib; {
             description = "MCP server for indexing Obsidian vaults into SurrealDB";
             license = licenses.agpl3Plus;
