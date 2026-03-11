@@ -38,12 +38,19 @@ async fn main() -> Result<()> {
     } else {
         Level::INFO
     };
+    // When running under systemd, journald adds its own timestamps — skip ours
+    let in_systemd = std::env::var("JOURNAL_STREAM").is_ok();
     let subscriber = FmtSubscriber::builder()
         .with_max_level(log_level)
         .with_target(false)
-        .compact()
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
+        .with_ansi(!in_systemd)
+        .with_timer(tracing_subscriber::fmt::time::SystemTime)
+        .compact();
+    if in_systemd {
+        tracing::subscriber::set_global_default(subscriber.without_time().finish())?;
+    } else {
+        tracing::subscriber::set_global_default(subscriber.finish())?;
+    }
 
     info!("🦀 Surreal Obsidian MCP starting...");
     info!("📝 Config file: {}", args.config.display());

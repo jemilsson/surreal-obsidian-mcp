@@ -355,6 +355,12 @@ impl McpServer {
         // Initialize reranking service if configured
         let reranking_service = create_reranking_service(&config.reranking).ok();
 
+        if embedding_service.is_some() {
+            info!("✅ Embedding service initialized");
+        } else {
+            info!("⚠️  Embedding service disabled");
+        }
+
         if reranking_service.is_some() {
             info!("✅ Reranking service initialized");
         }
