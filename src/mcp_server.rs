@@ -185,7 +185,7 @@ fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, Str
 
     // Create engine and execute query
     let mut engine = DefaultEngine::default();
-    
+
     // The runtime_values are already in the correct format for mq
     let input = runtime_values.into_iter();
 
@@ -194,10 +194,8 @@ fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, Str
         .map_err(|e| format!("Query execution failed: {}", e))?;
 
     // Convert RuntimeValues (collection) to JSON array
-    let json_values: Vec<serde_json::Value> = results.values()
-        .iter()
-        .map(runtime_value_to_json)
-        .collect();
+    let json_values: Vec<serde_json::Value> =
+        results.values().iter().map(runtime_value_to_json).collect();
 
     // If there's only one result, return it directly; otherwise return an array
     if json_values.len() == 1 {
@@ -217,11 +215,11 @@ fn runtime_value_to_json(value: &RuntimeValue) -> serde_json::Value {
         RuntimeValue::Markdown(node, _selector) => {
             // Convert markdown node to string representation
             serde_json::Value::String(format!("{:?}", node))
-        },
+        }
         RuntimeValue::Array(arr) => {
             let json_arr: Vec<_> = arr.iter().map(runtime_value_to_json).collect();
             serde_json::Value::Array(json_arr)
-        },
+        }
         _ => {
             // For other types (Function, Dict, etc.), use debug representation
             serde_json::Value::String(format!("{:?}", value))
