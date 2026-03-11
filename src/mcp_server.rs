@@ -473,9 +473,16 @@ impl McpServer {
                         )),
                     }
                 } else {
-                    // No query - return block as JSON (original behavior)
-                    let text = serde_json::to_string_pretty(&b)
+                    // No query - return block as JSON, with a hint if content is in children
+                    let mut text = serde_json::to_string_pretty(&b)
                         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                    if b.content.trim().is_empty() && !b.children_ids.is_empty() {
+                        text.push_str(&format!(
+                            "\n\nNote: This block has no top-level content but has {} section(s). Use get_blocks_by_file(\"{}\") to read all sections.",
+                            b.children_ids.len(),
+                            b.file_path
+                        ));
+                    }
                     Ok(CallToolResult::success(vec![Content::text(text)]))
                 }
             }
@@ -523,7 +530,7 @@ impl McpServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let text = format!(
-            "Found {} files:\n\n{}",
+            "Found {} files:\n\n{}To read a file's contents, use get_blocks_by_file with the exact file_path shown above.",
             files.len(),
             files
                 .iter()
