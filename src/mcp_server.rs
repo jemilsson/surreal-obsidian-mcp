@@ -1,4 +1,5 @@
 use anyhow::Result;
+use mq_lang::RuntimeValue;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -166,8 +167,8 @@ fn parse_address_with_query(address: &str) -> (String, Option<String>) {
 
 /// Execute an mq query on a block's markdown content
 fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, String> {
-    use mq_lang::Interpreter;
-    use mq_markdown::parse_markdown;
+    use mq_lang::{DefaultEngine, RuntimeValue};
+    use mq_markdown::Markdown;
 
     // Construct full markdown content
     let markdown_content = if block.level == 0 {
@@ -179,16 +180,59 @@ fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, Str
         format!("{} {}\n\n{}", heading_prefix, block.title, block.content)
     };
 
-    let interpreter = Interpreter::new();
-
-    // Parse markdown into mq's AST
-    let ast = parse_markdown(&markdown_content)
+    // Parse markdown into mq's Markdown AST
+    let markdown: Markdown = markdown_content.parse()
         .map_err(|e| format!("Failed to parse markdown: {}", e))?;
 
-    // Execute the query
-    interpreter
-        .eval(query, &ast)
-        .map_err(|e| format!("Query execution failed: {}", e))
+    // Create engine and execute query
+    let mut engine = DefaultEngine::default();
+
+    // Wrap the markdown nodes in a Fragment for mq processing
+    use mq_markdown::{Node, Fragment};
+    let root_node = Node::Fragment(Fragment {
+        values: markdown.nodes.clone(),
+    });
+
+    let input = vec![RuntimeValue::Markdown(root_node, None)].into_iter();
+
+    let results = engine
+        .eval(query, input)
+        .map_err(|e| format!("Query execution failed: {}", e))?;
+
+    // Convert RuntimeValues (collection) to JSON array
+    let json_values: Vec<serde_json::Value> = results.values()
+        .iter()
+        .map(runtime_value_to_json)
+        .collect();
+
+    // If there's only one result, return it directly; otherwise return an array
+    if json_values.len() == 1 {
+        Ok(json_values.into_iter().next().unwrap())
+    } else {
+        Ok(serde_json::Value::Array(json_values))
+    }
+}
+
+/// Convert a single RuntimeValue to JSON
+fn runtime_value_to_json(value: &RuntimeValue) -> serde_json::Value {
+    match value {
+        RuntimeValue::String(s) => serde_json::Value::String(s.clone()),
+        RuntimeValue::Number(n) => serde_json::json!(n.value()),
+        RuntimeValue::Boolean(b) => serde_json::Value::Bool(*b),
+        RuntimeValue::None => serde_json::Value::Null,
+        RuntimeValue::Markdown(node, _selector) => {
+            // Convert markdown node to string representation
+            serde_json::Value::String(format!("{:?}", node))
+        },
+        RuntimeValue::Array(arr) => {
+            let json_arr: Vec<_> = arr.iter().map(runtime_value_to_json).collect();
+            serde_json::Value::Array(json_arr)
+        },
+        _ => {
+            // For other types (Function, Dict, etc.), use debug representation
+            serde_json::Value::String(format!("{:?}", value))
+        }
+    }
 }
 
 /// Expand the graph from a starting block to the specified depth
@@ -264,11 +308,6 @@ impl McpServer {
     /// List all available tools
     pub fn list_tools(&self) -> Vec<Tool> {
         self.tool_router.list_all()
-    }
-
-    /// Call a tool by name with arguments
-    pub async fn call_tool(&self, request: CallToolRequest) -> Result<CallToolResult, McpError> {
-        self.tool_router.call_tool(self, request).await
     }
 
     /// Automatically re-index a file when database inconsistencies are detected

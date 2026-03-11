@@ -332,6 +332,8 @@ mod tests {
     use tempfile::tempdir;
 
     fn create_test_config(vault_path: PathBuf, db_path: PathBuf) -> Config {
+        use crate::config::{TransportConfig, TransportType};
+
         Config {
             vault: VaultConfig { path: vault_path },
             database: DatabaseConfig { path: db_path },
@@ -356,6 +358,10 @@ mod tests {
                 watch_for_changes: false,
                 initial_indexing: true,
                 batch_size: 10,
+            },
+            transport: TransportConfig {
+                transport_type: TransportType::Stdio,
+                http_port: 3000,
             },
             graph: GraphConfig {
                 extract_links: true,
