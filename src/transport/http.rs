@@ -188,7 +188,14 @@ impl From<&Block> for SearchResult {
             title: b.title.clone(),
             file_path: b.file_path.clone(),
             content_address: b.content_address.clone(),
-            content_preview: b.content.lines().next().unwrap_or("").chars().take(200).collect(),
+            content_preview: b
+                .content
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect(),
         }
     }
 }
@@ -198,7 +205,10 @@ async fn search_handler(
     State(server): State<Arc<McpServer>>,
     Query(params): Query<SearchQuery>,
 ) -> Response {
-    match server.do_search(&params.q, params.limit, params.expand).await {
+    match server
+        .do_search(&params.q, params.limit, params.expand)
+        .await
+    {
         Ok((core, expanded)) => {
             let results: Vec<SearchResult> = core.iter().map(SearchResult::from).collect();
             let expanded_results: Vec<SearchResult> =
@@ -276,7 +286,10 @@ async fn search_handler_post(
 
 async fn docs_handler() -> impl IntoResponse {
     (
-        [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/markdown; charset=utf-8",
+        )],
         r#"# surreal-obsidian-mcp API
 
 ## REST API

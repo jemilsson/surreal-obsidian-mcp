@@ -63,7 +63,6 @@ pub struct GetChildrenInput {
     pub parent_id: String,
 }
 
-
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct CreateBlockInput {
     /// File path relative to vault root (e.g., "folder/note.md")
@@ -464,10 +463,7 @@ impl McpServer {
     #[tool(
         description = "Search the vault by meaning or keywords. ALWAYS search before answering questions — relevant notes may already exist. Uses semantic search when available, falls back to keyword search. After finding a relevant result, call get_block(file_path) to read the full contents."
     )]
-    async fn search(
-        &self,
-        params: Parameters<SearchInput>,
-    ) -> Result<CallToolResult, McpError> {
+    async fn search(&self, params: Parameters<SearchInput>) -> Result<CallToolResult, McpError> {
         let (core, expanded) = self
             .do_search(&params.0.query, params.0.limit, params.0.expand)
             .await
@@ -665,7 +661,6 @@ impl McpServer {
 
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
-
 
     /// Create a new block (file or heading)
     #[tool(
