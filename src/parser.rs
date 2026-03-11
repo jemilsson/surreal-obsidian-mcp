@@ -213,7 +213,6 @@ fn find_heading_position(content: &str, level: u8, title: &str) -> Option<(usize
     None
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,22 +259,32 @@ Final content with #tag1 and #tag2.
 "#;
 
         let parsed = parse_markdown(content).unwrap();
-        
+
         println!("✅ Parse successful!");
         println!("Frontmatter entries: {}", parsed.frontmatter.len());
         println!("Headings: {}", parsed.headings.len());
         for (i, heading) in parsed.headings.iter().enumerate() {
-            println!("  Heading {}: level={}, title=\"{}\"", i+1, heading.level, heading.title);
+            println!(
+                "  Heading {}: level={}, title=\"{}\"",
+                i + 1,
+                heading.level,
+                heading.title
+            );
         }
         println!("Wiki links: {}", parsed.wiki_links.len());
         for (i, link) in parsed.wiki_links.iter().enumerate() {
-            println!("  Link {}: target=\"{}\" alias={:?}", i+1, link.target, link.alias);
+            println!(
+                "  Link {}: target=\"{}\" alias={:?}",
+                i + 1,
+                link.target,
+                link.alias
+            );
         }
         println!("Tags: {}", parsed.tags.len());
         for (i, tag) in parsed.tags.iter().enumerate() {
-            println!("  Tag {}: \"{}\"", i+1, tag);
+            println!("  Tag {}: \"{}\"", i + 1, tag);
         }
-        
+
         assert_eq!(parsed.frontmatter.len(), 1);
         assert_eq!(parsed.headings.len(), 3);
         assert_eq!(parsed.headings[0].title, "Heading 1");

@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
-#[cfg(feature = "persistent")]
-use surrealdb::engine::local::{Db, SurrealKv};
 #[cfg(not(feature = "persistent"))]
 use surrealdb::engine::local::{Db, Mem};
-use surrealdb::{Surreal, RecordId};
+#[cfg(feature = "persistent")]
+use surrealdb::engine::local::{Db, SurrealKv};
+use surrealdb::{RecordId, Surreal};
 use tracing::info;
 use uuid::Uuid;
 
@@ -131,7 +131,7 @@ impl Database {
         let db = Surreal::new::<SurrealKv>(path.as_ref())
             .await
             .context("Failed to create SurrealDB instance")?;
-        
+
         #[cfg(not(feature = "persistent"))]
         let db = Surreal::new::<Mem>(())
             .await
@@ -196,8 +196,7 @@ impl Database {
 
         // Insert the block using create() for SurrealDB 2.6 compatibility
         // We immediately fetch it back with get_block(), so we don't need the result here
-        self
-            .db
+        self.db
             .query("CREATE type::thing($table, $id) CONTENT $content")
             .bind(("table", "blocks"))
             .bind(("id", block_id.clone()))
@@ -261,8 +260,7 @@ impl Database {
         }
 
         // Update using query for SurrealDB 2.6 compatibility
-        self
-            .db
+        self.db
             .query("UPDATE type::thing($table, $id) CONTENT $content")
             .bind(("table", "blocks"))
             .bind(("id", id.to_string()))
@@ -278,8 +276,7 @@ impl Database {
 
     /// Delete a block
     pub async fn delete_block(&self, id: &str) -> Result<()> {
-        self
-            .db
+        self.db
             .query("DELETE type::thing($table, $id)")
             .bind(("table", "blocks"))
             .bind(("id", id.to_string()))
