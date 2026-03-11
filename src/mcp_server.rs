@@ -1,5 +1,5 @@
 use anyhow::Result;
-// use mq_lang::RuntimeValue;
+use mq_lang::RuntimeValue;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -165,13 +165,69 @@ fn parse_address_with_query(address: &str) -> (String, Option<String>) {
     }
 }
 
-/// Execute an mq query on a block's markdown content (temporarily disabled)
-fn execute_mq_query(_block: &Block, _query: &str) -> Result<serde_json::Value, String> {
-    // Temporarily disabled mq functionality for faster build
-    Err("mq query functionality temporarily disabled for build performance".to_string())
+/// Execute an mq query on a block's markdown content
+fn execute_mq_query(block: &Block, query: &str) -> Result<serde_json::Value, String> {
+    use mq_lang::DefaultEngine;
+
+    // Construct full markdown content
+    let markdown_content = if block.level == 0 {
+        // File block: just use content (already includes title as heading)
+        block.content.clone()
+    } else {
+        // Section block: prepend heading
+        let heading_prefix = "#".repeat(block.level as usize);
+        format!("{} {}\n\n{}", heading_prefix, block.title, block.content)
+    };
+
+    // Use mq_lang to parse markdown directly into RuntimeValue
+    let runtime_values = mq_lang::parse_markdown_input(&markdown_content)
+        .map_err(|e| format!("Failed to parse markdown: {}", e))?;
+
+    // Create engine and execute query
+    let mut engine = DefaultEngine::default();
+    
+    // The runtime_values are already in the correct format for mq
+    let input = runtime_values.into_iter();
+
+    let results = engine
+        .eval(query, input)
+        .map_err(|e| format!("Query execution failed: {}", e))?;
+
+    // Convert RuntimeValues (collection) to JSON array
+    let json_values: Vec<serde_json::Value> = results.values()
+        .iter()
+        .map(runtime_value_to_json)
+        .collect();
+
+    // If there's only one result, return it directly; otherwise return an array
+    if json_values.len() == 1 {
+        Ok(json_values.into_iter().next().unwrap())
+    } else {
+        Ok(serde_json::Value::Array(json_values))
+    }
 }
 
-// RuntimeValue to JSON conversion temporarily disabled
+/// Convert a single RuntimeValue to JSON
+fn runtime_value_to_json(value: &RuntimeValue) -> serde_json::Value {
+    match value {
+        RuntimeValue::String(s) => serde_json::Value::String(s.clone()),
+        RuntimeValue::Number(n) => serde_json::json!(n.value()),
+        RuntimeValue::Boolean(b) => serde_json::Value::Bool(*b),
+        RuntimeValue::None => serde_json::Value::Null,
+        RuntimeValue::Markdown(node, _selector) => {
+            // Convert markdown node to string representation
+            serde_json::Value::String(format!("{:?}", node))
+        },
+        RuntimeValue::Array(arr) => {
+            let json_arr: Vec<_> = arr.iter().map(runtime_value_to_json).collect();
+            serde_json::Value::Array(json_arr)
+        },
+        _ => {
+            // For other types (Function, Dict, etc.), use debug representation
+            serde_json::Value::String(format!("{:?}", value))
+        }
+    }
+}
 
 /// Expand the graph from a starting block to the specified depth
 /// Returns all blocks discovered during expansion (excluding the starting block)
