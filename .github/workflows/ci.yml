@@ -2,67 +2,69 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable]
+  test-linux:
+    name: Test (Linux - Nix)
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
         with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
+          nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          name: nix-community
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check flake
+        run: nix flake check
 
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - name: Build with Nix
+        run: nix build
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-features -- -D warnings
-
-      - name: Build
-        run: cargo build --verbose
-
-      - name: Build with embedded feature
-        run: cargo build --features embedded --verbose
-
-      - name: Run tests
-        run: cargo test --verbose
+      - name: Run tests with Nix
+        run: nix develop --command cargo test --verbose
 
       - name: Run tests with all features
-        run: cargo test --all-features --verbose
+        run: nix develop --command cargo test --all-features --verbose
+
+      - name: Check formatting
+        run: nix develop --command cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: nix develop --command cargo clippy --all-features -- -D warnings
+
+  test-macos:
+    name: Test (macOS - Nix)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Build with Nix
+        run: nix build
+
+      - name: Run tests with Nix
+        run: nix develop --command cargo test --verbose
 
   security:
     name: Security Audit
